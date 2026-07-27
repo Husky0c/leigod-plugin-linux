@@ -13,10 +13,16 @@ error() { printf "${RED}[ERROR]${NC} %s\n" "$*"; exit 1; }
 
 if [ "$(id -u)" -ne 0 ]; then error "Please run as root (sudo ./install.sh)"; fi
 
+SKIP_SYSTEMD="${LEIGOD_SKIP_SYSTEMD:-0}"
+case "$SKIP_SYSTEMD" in
+    1|true|TRUE|yes|YES) SKIP_SYSTEMD=1 ;;
+    *) SKIP_SYSTEMD=0 ;;
+esac
+
 ARCH=$(uname -m)
 if [ "$ARCH" != "x86_64" ]; then error "Only x86_64 supported, current: $ARCH"; fi
 
-if ! command -v systemctl >/dev/null 2>&1; then
+if [ "$SKIP_SYSTEMD" != "1" ] && ! command -v systemctl >/dev/null 2>&1; then
     error "systemd not found. This package requires systemd."
 fi
 
@@ -103,12 +109,23 @@ BindReadOnlyPaths=/opt/leigod/fake_os-release:/etc/os-release
 [Install]
 WantedBy=default.target
 SERVICEEOF
+
+    if [ "$SKIP_SYSTEMD" = "1" ]; then
+        info "Skipping systemd activation (LEIGOD_SKIP_SYSTEMD=1)."
+        return
+    fi
+
     systemctl daemon-reload
     systemctl enable leigod_plugin.service
     info "Service enabled (will auto-start on boot)."
 }
 
 start_service() {
+    if [ "$SKIP_SYSTEMD" = "1" ]; then
+        info "Skipping service start (LEIGOD_SKIP_SYSTEMD=1)."
+        return
+    fi
+
     info "Starting Leigod Plugin Service..."
     systemctl start leigod_plugin.service 2>/dev/null || true
     sleep 2
@@ -136,4 +153,10 @@ print_summary() {
 }
 
 echo ""; echo "Leigod Plugin v$VERSION Installer"; echo "============================================"; echo ""
-detect_pkg_manager; install_deps; install_files; download_binaries; create_symlink; setup_service; start_service; print_summary
+detect_pkg_manager; install_deps; install_files; download_binaries; create_symlink; setup_service
+if [ "${LEIGOD_SKIP_SYSTEMD:-0}" = "1" ]; then
+    info "Container mode enabled: skipping systemd service activation."
+else
+    start_service
+fi
+print_summary

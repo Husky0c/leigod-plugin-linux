@@ -34,6 +34,16 @@ sudo ./install.sh     # 自动下载二进制、安装依赖、创建服务
 
 安装后打开手机雷神加速器 App → 绑定设备 → 开始加速。
 
+## Docker / Docker Compose 运行环境
+
+项目已包含可直接使用的容器化运行环境，适合在不修改宿主机系统的前提下进行安装、调试和验证。
+
+```bash
+docker compose build
+docker compose up -d
+docker compose exec leigod-plugin bash
+```
+
 ## 文件结构
 
 ```
