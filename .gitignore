@@ -11,6 +11,7 @@ packages/*.tar.gz
 # Temp files
 /tmp/
 /tmp/acc/
+logs
 
 # Editor backups
 *~
