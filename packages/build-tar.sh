@@ -1,32 +1,37 @@
 #!/bin/sh
 set -e
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)"
 OUTPUT="$REPO_DIR/packages/leigod-plugin_1.2.2.15_amd64.tar.gz"
 TMPDIR="/tmp/opencode/leigod-plugin-tar"
+PACKAGE_ROOT="$TMPDIR/leigod-plugin-1.2.2.15"
 
-BASE_URL="http://119.3.40.126"
-mkdir -p "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/config"
+rm -rf "$TMPDIR"
+mkdir -p "$PACKAGE_ROOT/opt/leigod/config" "$PACKAGE_ROOT/scripts"
 
-# Download binaries from Leigod official server
-echo "Downloading Leigod binary..."
-curl -# -o "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/acc-gw.router.amd64" "$BASE_URL/acc-gw.router.amd64"
-cp "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/acc-gw.router.amd64" "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/acc_upgrade_monitor"
-echo "Downloading IP database..."
-curl -# -o "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/config/ipdatacloud_country.xdb" "$BASE_URL/ipdatacloud_country.xdb"
+# Download both assets, verify pinned SHA-256 values, then install atomically.
+LEIGOD_CHECKSUM_FILE=${LEIGOD_CHECKSUM_FILE:-$REPO_DIR/checksums.sha256} \
+    sh "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/opt/leigod"
 
 # Copy files
-cp -r "$REPO_DIR/opt/leigod/"* "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/"
-cp "$REPO_DIR/install.sh" "$TMPDIR/leigod-plugin-1.2.2.15/"
-cp "$REPO_DIR/uninstall.sh" "$TMPDIR/leigod-plugin-1.2.2.15/"
+cp "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/"
+cp "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$PACKAGE_ROOT/opt/leigod/"
+cp "$REPO_DIR/opt/leigod/fake_os-release" "$PACKAGE_ROOT/opt/leigod/"
+cp "$REPO_DIR/opt/leigod/fake_product_name" "$PACKAGE_ROOT/opt/leigod/"
+cp "$REPO_DIR/opt/leigod/config/acc_version.ini" "$PACKAGE_ROOT/opt/leigod/config/"
+cp "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$PACKAGE_ROOT/opt/leigod/config/"
+cp "$REPO_DIR/opt/leigod/config/accelerator.ini" "$PACKAGE_ROOT/opt/leigod/config/"
+touch "$PACKAGE_ROOT/opt/leigod/config/accelerator"
+cp "$REPO_DIR/install.sh" "$PACKAGE_ROOT/"
+cp "$REPO_DIR/uninstall.sh" "$PACKAGE_ROOT/"
+cp "$REPO_DIR/checksums.sha256" "$PACKAGE_ROOT/"
+cp "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/scripts/"
 
 # Permissions
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/install.sh"
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/uninstall.sh"
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/acc-gw.router.amd64"
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/acc_upgrade_monitor"
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/steamdeck_acc_monitor.sh"
-chmod 755 "$TMPDIR/leigod-plugin-1.2.2.15/opt/leigod/leigod_uninstall.sh"
+chmod 755 "$PACKAGE_ROOT/install.sh" "$PACKAGE_ROOT/uninstall.sh"
+chmod 755 "$PACKAGE_ROOT/scripts/fetch-assets.sh"
+chmod 755 "$PACKAGE_ROOT/opt/leigod/acc-gw.router.amd64" "$PACKAGE_ROOT/opt/leigod/acc_upgrade_monitor"
+chmod 755 "$PACKAGE_ROOT/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/leigod_uninstall.sh"
 
 cd "$TMPDIR" && tar czf "$OUTPUT" "leigod-plugin-1.2.2.15/"
 rm -rf "$TMPDIR"

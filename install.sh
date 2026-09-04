@@ -4,7 +4,7 @@ set -e
 VERSION="1.2.2.15"
 BASE="/opt/leigod"
 SERVICE_FILE="/etc/systemd/system/leigod_plugin.service"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -P "$(dirname "$0")" && pwd)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info()  { printf "${GREEN}[INFO]${NC} %s\n" "$*"; }
@@ -50,22 +50,42 @@ install_deps() {
 }
 
 download_binaries() {
-    local base_url="http://119.3.40.126"
-    info "Downloading Leigod binary from $base_url/acc-gw.router.amd64..."
-    curl -# -o "$BASE/acc-gw.router.amd64" "$base_url/acc-gw.router.amd64" || \
-        error "Failed to download acc-gw.router.amd64"
-    cp "$BASE/acc-gw.router.amd64" "$BASE/acc_upgrade_monitor"
-    info "Downloading IP database..."
-    curl -# -o "$BASE/config/ipdatacloud_country.xdb" "$base_url/ipdatacloud_country.xdb" || \
-        error "Failed to download ipdatacloud_country.xdb"
-    chmod 755 "$BASE/acc-gw.router.amd64" "$BASE/acc_upgrade_monitor"
-    info "Binaries downloaded."
+    checksum_file=${LEIGOD_CHECKSUM_FILE:-$SCRIPT_DIR/checksums.sha256}
+    asset_source=${LEIGOD_ASSET_SOURCE_DIR:-}
+
+    if [ -z "$asset_source" ] \
+        && [ -f "$SCRIPT_DIR/opt/leigod/acc-gw.router.amd64" ] \
+        && [ -f "$SCRIPT_DIR/opt/leigod/config/ipdatacloud_country.xdb" ]; then
+        asset_source=$SCRIPT_DIR/opt/leigod
+    fi
+
+    info "Fetching Leigod assets with pinned SHA-256 verification..."
+    LEIGOD_BASE_URL=${LEIGOD_BASE_URL:-http://119.3.40.126} \
+    LEIGOD_CHECKSUM_FILE=$checksum_file \
+    LEIGOD_ASSET_SOURCE_DIR=$asset_source \
+        sh "$SCRIPT_DIR/scripts/fetch-assets.sh" "$BASE" \
+        || error "Failed to fetch or verify Leigod assets"
+}
+
+stop_existing_service() {
+    if systemctl is-active --quiet leigod_plugin.service 2>/dev/null; then
+        info "Stopping existing Leigod service before replacing files..."
+        systemctl stop leigod_plugin.service \
+            || error "Failed to stop existing Leigod service"
+    fi
 }
 
 install_files() {
     info "Installing files to $BASE..."
     mkdir -p "$BASE/config"
-    cp -r "$SCRIPT_DIR/opt/leigod/"* "$BASE/"
+    cp "$SCRIPT_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BASE/"
+    cp "$SCRIPT_DIR/opt/leigod/leigod_uninstall.sh" "$BASE/"
+    cp "$SCRIPT_DIR/opt/leigod/fake_os-release" "$BASE/"
+    cp "$SCRIPT_DIR/opt/leigod/fake_product_name" "$BASE/"
+    cp "$SCRIPT_DIR/opt/leigod/config/acc_version.ini" "$BASE/config/"
+    cp "$SCRIPT_DIR/opt/leigod/config/accelerator.ini" "$BASE/config/"
+    cp "$SCRIPT_DIR/opt/leigod/config/new_upgrade_conf.json" "$BASE/config/"
+    : > "$BASE/config/accelerator"
     chmod 755 "$BASE/steamdeck_acc_monitor.sh" "$BASE/leigod_uninstall.sh"
     info "Files installed."
 }
@@ -110,7 +130,8 @@ SERVICEEOF
 
 start_service() {
     info "Starting Leigod Plugin Service..."
-    systemctl start leigod_plugin.service 2>/dev/null || true
+    systemctl restart leigod_plugin.service \
+        || error "Failed to start Leigod Plugin Service"
     sleep 2
     if systemctl is-active --quiet leigod_plugin.service; then
         info "Service is running."
@@ -136,4 +157,4 @@ print_summary() {
 }
 
 echo ""; echo "Leigod Plugin v$VERSION Installer"; echo "============================================"; echo ""
-detect_pkg_manager; install_deps; install_files; download_binaries; create_symlink; setup_service; start_service; print_summary
+detect_pkg_manager; install_deps; stop_existing_service; install_files; download_binaries; create_symlink; setup_service; start_service; print_summary

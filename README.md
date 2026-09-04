@@ -1,6 +1,6 @@
 # Leigod Plugin — SteamDeck 网络加速器 | 通用 Linux 移植版
 
-[雷神加速器](https://www.leigod.com) 的 SteamDeck 插件，伪装后可在 **任意 x86_64 Linux 发行版**（Ubuntu / Debian / Fedora / Arch / openSUSE 等）上运行。伪装为 SteamDeck 硬件，通过手机 App 绑定后即可对游戏进行网络加速。
+[雷神加速器](https://www.leigod.com) 的 SteamDeck 插件，伪装后可在 **x86_64 Linux 发行版**（Ubuntu / Debian / Fedora / Arch / openSUSE 等）上运行。伪装为 SteamDeck 硬件，通过手机 App 绑定后即可对游戏进行网络加速。
 
 ## 原理
 
@@ -19,33 +19,53 @@
 - **架构**: x86_64 (amd64)
 - **内核**: Linux（支持 `dummy`、`tun`、`iptables` 模块）
 - **init**: systemd v227+
-- **依赖**: `ipset`、`curl`
+- **依赖**: `ipset`、`curl`，以及 `sha256sum` 或 `shasum`
 - **安装/构建时需要互联网连接**（自动从雷神服务器下载二进制）
 
 ## 快速安装
 
 ```bash
-git clone <仓库URL>
-cd leigod-plugin
-sudo ./install.sh     # 自动下载二进制、安装依赖、创建服务
+git clone https://github.com/Husky0c/leigod-plugin-linux.git
+cd leigod-plugin-linux
+sudo ./install.sh
 ```
 
-安装脚本会自动从雷神官方服务器下载二进制文件，无需手动准备。
+安装脚本会下载雷神文件，在执行或安装前使用仓库固定的 SHA-256 进行校验。校验失败时安装会立即终止，原有已安装文件不会被替换。
 
 安装后打开手机雷神加速器 App → 绑定设备 → 开始加速。
 
+## 下载安全
+
+雷神当前提供的下载地址是明文 HTTP，传输层本身无法证明文件来源。因此本项目将允许执行的文件哈希固定在 [`checksums.sha256`](checksums.sha256) 中，并执行以下流程：
+
+1. 下载到权限受限的临时目录；
+2. 所有文件完成 SHA-256 校验；
+3. 校验全部通过后，才在目标文件系统内原子替换；
+4. 任一下载或校验失败时安全退出。
+
+如果雷神更新远端文件，安装会因哈希变化而失败。这是预期的安全行为。维护者应通过可信、独立渠道取得并审核新文件后，再更新版本号和哈希；不要关闭或绕过校验。
+
+为防止闭源升级程序绕过上述校验，`acc_upgrade_monitor` 默认不启动。建议通过本仓库的新版本更新。如果明确接受未经过本仓库固定哈希验证的自动更新风险，可使用 systemd drop-in 显式启用：
+
+```ini
+[Service]
+Environment=LEIGOD_ENABLE_UPDATER=1
+```
+
 ## 文件结构
 
-```
-leigod-plugin/
+```text
+leigod-plugin-linux/
 ├── install.sh                    # 通用安装脚本
 ├── uninstall.sh                  # 通用卸载脚本
+├── checksums.sha256              # 固定的上游文件 SHA-256
+├── scripts/
+│   └── fetch-assets.sh           # 下载、校验与原子安装
 ├── opt/leigod/
 │   ├── acc-gw.router.amd64       # 雷神加速主程序（下载时获取）
-│   ├── acc_upgrade_monitor       # 升级监控程序（同上）
+│   ├── acc_upgrade_monitor       # 升级程序副本（默认不启动）
 │   ├── steamdeck_acc_monitor.sh  # 进程守护脚本
-│   ├── plugin_common.sh          # 雷神官方安装脚本库
-│   ├── leigod_uninstall.sh       # 雷神官方卸载脚本
+│   ├── leigod_uninstall.sh       # 安全卸载脚本
 │   ├── fake_os-release           # 伪造 SteamOS 信息
 │   ├── fake_product_name         # 伪造 Jupiter 硬件名
 │   └── config/
@@ -57,73 +77,67 @@ leigod-plugin/
 ├── systemd/
 │   └── leigod_plugin.service     # systemd 服务单元
 ├── debian/                       # dpkg-deb 打包文件
-│   ├── control
-│   ├── preinst
-│   ├── postinst
-│   ├── prerm
-│   └── postrm
-├── packages/
-│   ├── build-deb.sh              # 构建 .deb 包
-│   └── build-tar.sh              # 构建 .tar.gz 包
-└── README.md
+└── packages/
+    ├── build-deb.sh              # 构建 .deb 包
+    └── build-tar.sh              # 构建 .tar.gz 包
 ```
 
 ## 服务管理
 
 ```bash
-sudo systemctl status  leigod_plugin.service   # 查看状态
-sudo systemctl restart leigod_plugin.service   # 重启
-sudo systemctl stop    leigod_plugin.service   # 停止
-sudo journalctl -xeu   leigod_plugin.service   # 查看日志
+sudo systemctl status  leigod_plugin.service
+sudo systemctl restart leigod_plugin.service
+sudo systemctl stop    leigod_plugin.service
+sudo journalctl -xeu   leigod_plugin.service
 ```
 
 ## 卸载
 
 ```bash
-cd leigod-plugin
+cd leigod-plugin-linux
 sudo ./uninstall.sh
 ```
 
+卸载脚本不会清空宿主机共享的 iptables 表。服务会先收到停止信号，以便核心程序清理其规则；如异常退出后网络状态仍有残留，安全做法是重启系统，不要执行 `iptables -t mangle -F`。
+
 ## 从零构建安装包
 
-构建脚本会自动从雷神服务器下载二进制，打包成可分发的安装包。
+构建脚本同样会下载并校验固定哈希，校验失败时不会生成安装包。
 
 ```bash
 cd packages
-bash build-deb.sh                   # 生成 .deb（供 Debian 系使用）
-bash build-tar.sh                   # 生成 .tar.gz（供通用 Linux 使用）
+bash build-deb.sh
+bash build-tar.sh
 ```
 
 构建产物输出到 `packages/` 目录。
 
-## 注意
-
-- `acc-gw.router.amd64` 和 `ipdatacloud_country.xdb` 为雷神官方版权内容，不在本仓库中直接分发
-- 安装和构建脚本在运行时自动从雷神官方服务器下载上述文件
-
 ## 常见问题
 
+**Q: 下载文件提示 SHA-256 mismatch？**  
+远端文件已经变化或传输内容遭到篡改。不要绕过校验；等待项目审核新版本并更新 `checksums.sha256`。
+
 **Q: 加速无法启动，App 显示错误？**
-查看日志定位原因：
+
 ```bash
 journalctl -xeu leigod_plugin.service
 tail -f /tmp/acc/log/acc_daemon.log
 ```
 
-**Q: 重启后加速失效？**
+**Q: 重启后加速失效？**  
 这是正常行为。加速状态不会持久化，每次需要从 App 重新开启加速。
 
-**Q: 可以用于 ARM 设备（树莓派）吗？**
+**Q: 可以用于 ARM 设备（树莓派）吗？**  
 不能。雷神官方只提供了 amd64 二进制。
 
-**Q: 更换网卡后绑定会丢失吗？**
+**Q: 更换网卡后绑定会丢失吗？**  
 MAC 地址回退到 `/etc/machine-id` 派生值，只要系统未重装则不变。绑定信息同时保存在雷神云端。
 
 ## 免责声明
 
 本仓库**不含**雷神官方二进制文件，也未对雷神核心程序进行任何逆向分析、修改或破解。所有脚本仅通过 systemd 的 `BindReadOnlyPaths` 和网络层配置（创建 dummy 接口）在**外部模拟** SteamDeck 运行环境，使未修改的雷神官方二进制在普通 PC 上正常运行。
 
-`acc-gw.router.amd64` 和 `ipdatacloud_country.xdb` 由安装/构建脚本直接从雷神官方服务器下载，版权归雷神所有。使用雷神服务需遵守其服务条款。
+`acc-gw.router.amd64` 和 `ipdatacloud_country.xdb` 由安装/构建脚本下载并校验，版权归雷神所有。使用雷神服务需遵守其服务条款。
 
 本项目仅供学习研究。请遵守当地法律法规。
 

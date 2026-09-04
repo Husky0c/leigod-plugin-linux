@@ -1,56 +1,47 @@
 #!/bin/sh
+set -eu
 
-# 获取脚本所在目录
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+BASE="/opt/leigod"
+SERVICE_NAME="leigod_plugin.service"
+SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
 
-# this script is use to install leigod plugin
-ver_name="version"
-init_file_name="acc"
-binary_prefix="acc-gw.router"
-#common_file_name="plugin_common.sh"
-common_file_name="${SCRIPT_DIR}/plugin_common.sh"
-download_base_url="http://119.3.40.126"
+info() { printf '[INFO] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
 
-
-# include common file 
-. ${common_file_name}
-
-# preinstall_check 
-# check and set env
-preinstall_check
-
-if [ ${is_steamdeck} ]; then
-    echo "systemctl stop leigod_plugin"
-    systemctl stop leigod_plugin
-
-    echo "rm /etc/systemd/system/leigod_plugin.service"
-    rm /etc/systemd/system/leigod_plugin.service
-
-    pids=$(ps ax | grep "acc-gw.router.amd64" | awk '{print $1}')
-    for pid in $pids; do
-      if [ -d "/proc/$pid" ]; then
-        echo "steamdeck kill $pid"
-        kill -9 "$pid"
-      fi
-    done
-
-    pids=$(ps ax | grep "acc_upgrade_monitor" | awk '{print $1}')
-    for pid in $pids; do
-      if [ -d "/proc/$pid" ]; then
-        echo "steamdeck kill acc_upgrade_monitor $pid"
-        kill -9 "$pid"
-      fi
-    done
-
-    echo "iptables -t mangle -F"
-    iptables -t mangle -F
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[ERROR] Please run as root" >&2
+    exit 1
 fi
 
-if [ ${is_openwrt} ]; then
-  echo "remove openwrt config"
-  remove_openwrt_series_config
-  remove_openwrt_series_init
+info "Stopping Leigod service..."
+systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+rm -f "$SERVICE_FILE"
+systemctl daemon-reload 2>/dev/null || true
+
+# Kill only exact Leigod process names if the service did not stop them.
+if command -v pidof >/dev/null 2>&1; then
+    for process_name in acc-gw.router.amd64 acc_upgrade_monitor steamdeck_acc_monitor.sh; do
+        for pid in $(pidof "$process_name" 2>/dev/null || true); do
+            case "$pid" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            kill "$pid" 2>/dev/null || true
+        done
+    done
 fi
 
-# remove_binary remove binary
-remove_binary
+rm -rf "$BASE" /tmp/acc
+rm -f /var/run/acc_daemon.lock
+
+if [ -L /home/leigod ] && [ "$(readlink /home/leigod)" = "$BASE" ]; then
+    rm -f /home/leigod
+fi
+
+# Never flush a shared host firewall table. The old upstream-derived script
+# used `iptables -t mangle -F`, which could delete unrelated Docker, VPN, and
+# firewall rules. The service is stopped gracefully so the Leigod process can
+# remove its own transient rules. A reboot is the safe fallback for stale rules.
+warn "Host firewall tables were intentionally left untouched."
+warn "If networking remains altered, reboot instead of flushing the mangle table."
+info "Leigod Plugin uninstalled."
