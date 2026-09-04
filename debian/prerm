@@ -1,20 +1,13 @@
 #!/bin/sh
-set -e
+set -eu
 
 case "$1" in
     remove|purge|upgrade|deconfigure)
-        if systemctl is-active --quiet leigod_plugin.service 2>/dev/null; then
+        if command -v systemctl >/dev/null 2>&1 \
+            && systemctl cat leigod_plugin.service >/dev/null 2>&1; then
             systemctl stop leigod_plugin.service
         fi
-
-        for proc in acc-gw.router.amd64 acc_upgrade_monitor steamdeck_acc_monitor.sh; do
-            pids=$(pidof "$proc" 2>/dev/null || true)
-            if [ -n "$pids" ]; then
-                kill -9 $pids 2>/dev/null || true
-            fi
-        done
         ;;
-
     *)
         echo "prerm called with unknown argument: $1" >&2
         exit 1

@@ -1,38 +1,59 @@
 #!/bin/sh
-set -e
+set -eu
 
-REPO_DIR="$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)"
-OUTPUT="$REPO_DIR/packages/leigod-plugin_1.2.2.15_amd64.tar.gz"
-TMPDIR="/tmp/opencode/leigod-plugin-tar"
-PACKAGE_ROOT="$TMPDIR/leigod-plugin-1.2.2.15"
+umask 077
 
-rm -rf "$TMPDIR"
-mkdir -p "$PACKAGE_ROOT/opt/leigod/config" "$PACKAGE_ROOT/scripts"
+REPO_DIR=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC1091
+. "$REPO_DIR/release.env"
 
-# Download both assets, verify pinned SHA-256 values, then install atomically.
-LEIGOD_CHECKSUM_FILE=${LEIGOD_CHECKSUM_FILE:-$REPO_DIR/checksums.sha256} \
+CHECKSUM_FILE=${LEIGOD_CHECKSUM_FILE:-$REPO_DIR/checksums.sha256}
+BUILD_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/leigod-plugin-tar.XXXXXX")
+PACKAGE_NAME=leigod-plugin-$PACKAGE_VERSION
+PACKAGE_ROOT=$BUILD_ROOT/$PACKAGE_NAME
+OUTPUT=$REPO_DIR/packages/leigod-plugin_${PACKAGE_VERSION}_amd64.tar.gz
+OUTPUT_TMP=$OUTPUT.tmp.$$
+
+cleanup() {
+    rm -rf "$BUILD_ROOT"
+    rm -f "$OUTPUT_TMP"
+}
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+
+install -d -m 0755 \
+    "$PACKAGE_ROOT/opt/leigod/config" \
+    "$PACKAGE_ROOT/scripts" \
+    "$PACKAGE_ROOT/systemd"
+
+LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
     sh "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/opt/leigod"
 
-# Copy files
-cp "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$PACKAGE_ROOT/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/fake_os-release" "$PACKAGE_ROOT/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/fake_product_name" "$PACKAGE_ROOT/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/config/acc_version.ini" "$PACKAGE_ROOT/opt/leigod/config/"
-cp "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$PACKAGE_ROOT/opt/leigod/config/"
-cp "$REPO_DIR/opt/leigod/config/accelerator.ini" "$PACKAGE_ROOT/opt/leigod/config/"
-touch "$PACKAGE_ROOT/opt/leigod/config/accelerator"
-cp "$REPO_DIR/install.sh" "$PACKAGE_ROOT/"
-cp "$REPO_DIR/uninstall.sh" "$PACKAGE_ROOT/"
-cp "$REPO_DIR/checksums.sha256" "$PACKAGE_ROOT/"
-cp "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/scripts/"
+install -m 0755 "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0755 "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0755 "$REPO_DIR/scripts/device-mac.sh" "$PACKAGE_ROOT/scripts/"
+install -m 0755 "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/scripts/"
+install -m 0644 "$REPO_DIR/opt/leigod/fake_os-release" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0644 "$REPO_DIR/opt/leigod/fake_product_name" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/acc_version.ini" "$PACKAGE_ROOT/opt/leigod/config/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$PACKAGE_ROOT/opt/leigod/config/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/accelerator.ini" "$PACKAGE_ROOT/opt/leigod/config/"
+: > "$PACKAGE_ROOT/opt/leigod/config/accelerator"
+chmod 0644 "$PACKAGE_ROOT/opt/leigod/config/accelerator"
 
-# Permissions
-chmod 755 "$PACKAGE_ROOT/install.sh" "$PACKAGE_ROOT/uninstall.sh"
-chmod 755 "$PACKAGE_ROOT/scripts/fetch-assets.sh"
-chmod 755 "$PACKAGE_ROOT/opt/leigod/acc-gw.router.amd64" "$PACKAGE_ROOT/opt/leigod/acc_upgrade_monitor"
-chmod 755 "$PACKAGE_ROOT/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/leigod_uninstall.sh"
+install -m 0755 "$REPO_DIR/install.sh" "$PACKAGE_ROOT/"
+install -m 0755 "$REPO_DIR/uninstall.sh" "$PACKAGE_ROOT/"
+install -m 0644 "$CHECKSUM_FILE" "$PACKAGE_ROOT/checksums.sha256"
+install -m 0644 "$REPO_DIR/release.env" "$PACKAGE_ROOT/"
+install -m 0644 "$REPO_DIR/systemd/leigod_plugin.service" "$PACKAGE_ROOT/systemd/"
+install -m 0644 "$REPO_DIR/README.md" "$PACKAGE_ROOT/"
+install -m 0644 "$REPO_DIR/LICENSE" "$PACKAGE_ROOT/"
+install -m 0644 "$REPO_DIR/THIRD_PARTY_NOTICES.md" "$PACKAGE_ROOT/"
 
-cd "$TMPDIR" && tar czf "$OUTPUT" "leigod-plugin-1.2.2.15/"
-rm -rf "$TMPDIR"
-echo "Built: $OUTPUT"
+export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C
+find "$PACKAGE_ROOT" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+tar --sort=name --format=gnu --owner=0 --group=0 --numeric-owner \
+    --mtime="@$SOURCE_DATE_EPOCH" -C "$BUILD_ROOT" -cf - "$PACKAGE_NAME" \
+    | gzip -n > "$OUTPUT_TMP"
+mv -f "$OUTPUT_TMP" "$OUTPUT"
+echo "Built reproducibly: $OUTPUT"
