@@ -1,7 +1,8 @@
 #!/bin/sh
 
 # 通用进程守护脚本
-# 监控两个进程：acc-gw.router 和 acc_upgrade_monitor
+# 默认只监控加速主进程。闭源自动升级进程默认禁用，避免绕过仓库中固定的
+# SHA-256 校验。确有需要时可显式设置 LEIGOD_ENABLE_UPDATER=1。
 
 run_env=$1
 
@@ -26,16 +27,16 @@ echo "=========================================" >> "$LOG_FILE"
 
 # 获取架构
 arch=$(uname -m)
-if [ ${arch} = "x86_64" ]; then
+if [ "${arch}" = "x86_64" ]; then
     log_message "match x86_64 -> amd64"
     arch="amd64"
-elif [ ${arch} = "aarch64" ]; then
+elif [ "${arch}" = "aarch64" ]; then
     log_message "match aarch64 -> arm64"
     arch="arm64"
-elif [ ${arch} = "mips" ]; then
+elif [ "${arch}" = "mips" ]; then
     log_message "match mips -> mipsel"
     arch="mipsel"
-elif [ ${arch} = "armv7l" ]; then
+elif [ "${arch}" = "armv7l" ]; then
     log_message "match armv7l -> arm"
     arch="arm"
 else
@@ -80,13 +81,24 @@ LOCK_FILE="/var/run/acc_daemon.lock"
 if [ "${run_env}" = "test" ]; then
     PROCESS_DATA="
     acc-gw.router.${arch}:-d debug -r daemon:${BASE_PATH}/acc-gw.router.${arch} -d debug -r daemon -m tun -p 5588
+    "
+    UPGRADE_PROCESS_DATA="
     acc_upgrade_monitor:-d debug -r upgrade:${BASE_PATH}/acc_upgrade_monitor -d debug -r upgrade
     "
 else
     PROCESS_DATA="
     acc-gw.router.${arch}:-r daemon:${BASE_PATH}/acc-gw.router.${arch} -r daemon -m tun -p 5588
+    "
+    UPGRADE_PROCESS_DATA="
     acc_upgrade_monitor:-r upgrade:${BASE_PATH}/acc_upgrade_monitor -r upgrade
-"
+    "
+fi
+
+if [ "${LEIGOD_ENABLE_UPDATER:-0}" = "1" ]; then
+    PROCESS_DATA="${PROCESS_DATA}${UPGRADE_PROCESS_DATA}"
+    log_message "WARNING: automatic upstream updater enabled; downloaded updates are not verified by checksums.sha256"
+else
+    log_message "Automatic upstream updater disabled; update through the verified installer"
 fi
 
 # 检查是否已有实例在运行
@@ -103,32 +115,29 @@ fi
 
 # 创建锁文件（写入当前PID）
 echo $$ > "$LOCK_FILE"
-#trap "rm -f '$LOCK_FILE'; log_message '[Monitor] Daemon stopped'; exit" INT TERM EXIT
 
 # 检查进程是否存在（精确匹配参数）
 is_process_running() {
-    local process_name="$1"
-    local pattern="$2"
-    
+    process_name="$1"
+    pattern="$2"
+
     # 使用 pidof 获取进程PID
     pids=$(pidof "$process_name" 2>/dev/null)
     if [ -z "$pids" ]; then
         return 1
     fi
-    
+
     # 遍历所有PID，检查命令行参数是否匹配
     for pid in $pids; do
         if [ -f "/proc/$pid/cmdline" ]; then
             # 读取进程命令行，将 \0 替换为空格
-            cmdline=$(cat "/proc/$pid/cmdline" | tr '\0' ' ')
-            # 检查是否包含指定的模式
-            echo "$cmdline" | grep -qF -- "$pattern"
-            if [ $? -eq 0 ]; then
-                return 0  # 进程存在且匹配
+            cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            if echo "$cmdline" | grep -qF -- "$pattern"; then
+                return 0
             fi
         fi
     done
-    return 1  # 进程不存在或不匹配
+    return 1
 }
 
 log_message "Monitor daemon started (PID: $$)"
@@ -136,33 +145,33 @@ log_message "Monitoring processes:"
 
 # 主循环
 while true; do
-    # 判断是否正在升级，如果在升级则直接返回
-    if [ -f ${UPGRADE_FLAG} ]; then
-        echo "it's upgrading..."
-        return
+    # 判断是否正在升级，如果在升级则退出，由 systemd 按策略处理
+    if [ -f "$UPGRADE_FLAG" ]; then
+        log_message "Upgrade flag detected; monitor exiting"
+        exit 0
     fi
 
-    # 使用临时文件存储进程状态，避免子shell问题
     echo "$PROCESS_DATA" | while IFS=":" read -r process_name pattern start_cmd; do
         # 跳过空行或空白行
         [ -z "$(echo "$process_name" | tr -d " ")" ] && continue
-        
+
         # 去除可能的空格
         process_name=$(echo "$process_name" | xargs)
         pattern=$(echo "$pattern" | xargs)
         start_cmd=$(echo "$start_cmd" | xargs)
-        
+
         # 检查进程是否存在
         if ! is_process_running "$process_name" "$pattern"; then
             log_message "Process not running: $process_name, starting..."
             log_message "Start command: $start_cmd"
-            
-            # 启动进程（后台运行）
-            eval "$start_cmd >/dev/null 2>&1 </dev/null &"
-            
+
+            # 命令内容由上面的静态 PROCESS_DATA 构造，不接受外部输入。
+            # shellcheck disable=SC2086
+            $start_cmd >/dev/null 2>&1 </dev/null &
+
             # 短暂等待，让进程启动
             sleep 1
-            
+
             # 验证进程是否成功启动
             if is_process_running "$process_name" "$pattern"; then
                 log_message "Successfully started: $process_name"
@@ -171,7 +180,7 @@ while true; do
             fi
         fi
     done
-    
+
     # 每5秒检查一次
     sleep 5
 done

@@ -1,0 +1,9 @@
+# Leigod Plugin v1.2.2.15 upstream assets.
+#
+# The upstream download endpoint currently uses plaintext HTTP. These pinned
+# hashes are therefore the trust anchor: never update them without obtaining
+# and reviewing the files through a trusted, independent channel.
+# Cross-check source: rePeek/leigod-plugin-linux commit
+# 6010a9d7d42048d1fa37ac01b27f3ca79c0f1fb2.
+8e0adbd1b1ce0d37e6588ff222408fed66a3f8954fee27bc37a10e0bf6806d4d  acc-gw.router.amd64
+3536000ee9eb3997538cb37a14f90d571979734c48b23b8d548eceac16666273  ipdatacloud_country.xdb
