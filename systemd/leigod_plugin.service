@@ -2,14 +2,53 @@
 Description=Leigod Plugin Service
 Wants=network-online.target
 After=network.target network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
+Type=simple
+WorkingDirectory=/opt/leigod
 ExecStart=/opt/leigod/steamdeck_acc_monitor.sh
 KillMode=control-group
-Restart=always
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
 RestartSec=3
+
+# Private, lifecycle-managed paths. The device identity persists in
+# /var/lib/leigod while the atomic monitor lock lives in /run/leigod.
+RuntimeDirectory=leigod
+RuntimeDirectoryMode=0700
+StateDirectory=leigod
+StateDirectoryMode=0700
+PrivateTmp=true
+UMask=0077
+
+# The closed-source daemon needs network administration for TUN, routes,
+# iptables and ipset. Remove every unrelated root capability.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+
+ProtectSystem=strict
+ReadWritePaths=/opt/leigod/config
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+PrivateMounts=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
 BindReadOnlyPaths=/opt/leigod/fake_product_name:/sys/class/dmi/id/product_name
 BindReadOnlyPaths=/opt/leigod/fake_os-release:/etc/os-release
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

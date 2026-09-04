@@ -1,186 +1,189 @@
 #!/bin/sh
+set -u
 
-# 通用进程守护脚本
-# 默认只监控加速主进程。闭源自动升级进程默认禁用，避免绕过仓库中固定的
-# SHA-256 校验。确有需要时可显式设置 LEIGOD_ENABLE_UPDATER=1。
+umask 077
 
-run_env=$1
+BASE_PATH=/opt/leigod
+RUNTIME_DIR=${LEIGOD_RUNTIME_DIR:-/run/leigod}
+LOCK_DIR=$RUNTIME_DIR/monitor.lock
+ACC_TMP_DIR=${LEIGOD_ACC_TMP_DIR:-/tmp/acc}
+UPGRADE_FLAG=$ACC_TMP_DIR/upgrade_flag
+MAX_START_FAILURES=${LEIGOD_MAX_START_FAILURES:-3}
+MAX_DAEMON_LOG_BYTES=${LEIGOD_MAX_DAEMON_LOG_BYTES:-52428800}
+run_env=${1:-}
 
-# 日志目录配置
-LOG_DIR="/tmp/acc/log/"
-LOG_FILE="$LOG_DIR/steamdeck_acc_monitor.log"
-
-UPGRADE_FLAG="/tmp/acc/upgrade_flag"
-
-# 创建日志目录（如果不存在）
-mkdir -p "$LOG_DIR"
-
-# 日志函数
 log_message() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
-# 初始化日志
-echo "=========================================" >> "$LOG_FILE"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting process monitor daemon" >> "$LOG_FILE"
-echo "=========================================" >> "$LOG_FILE"
-
-# 获取架构
-arch=$(uname -m)
-if [ "${arch}" = "x86_64" ]; then
-    log_message "match x86_64 -> amd64"
-    arch="amd64"
-elif [ "${arch}" = "aarch64" ]; then
-    log_message "match aarch64 -> arm64"
-    arch="arm64"
-elif [ "${arch}" = "mips" ]; then
-    log_message "match mips -> mipsel"
-    arch="mipsel"
-elif [ "${arch}" = "armv7l" ]; then
-    log_message "match armv7l -> arm"
-    arch="arm"
-else
-    log_message "current arch not support, arch: ${arch}"
-    exit 1
-fi
-
-# 获取 Steam Deck 安装目录
-get_steamdeck_party() {
-    BASE_PATH="/opt/leigod"
-    log_message "steamdeck plugin install directory is $BASE_PATH"
-}
-
-# 调用函数获取安装目录
-get_steamdeck_party
-
-# 创建虚拟 wlan0 网卡（雷神需要它来获取设备号）
-if ! ip link show wlan0 >/dev/null 2>&1; then
-    # 获取真实物理网卡的固定 MAC 地址
-    REAL_MAC=""
-    for iface in wlp0s20f3 wlan0 eno2 eno1 ens32 ens33 ens34 ens35 ens36; do
-        if [ -f "/sys/class/net/${iface}/address" ]; then
-            REAL_MAC=$(cat "/sys/class/net/${iface}/address" 2>/dev/null)
-            [ -n "$REAL_MAC" ] && break
-        fi
-    done
-    # 如果都没找到，生成一个基于机器 ID 的固定 MAC
-    if [ -z "$REAL_MAC" ]; then
-        REAL_MAC="02:$(cat /etc/machine-id 2>/dev/null | md5sum | head -c 10 | sed 's/\(..\)/\1:/g;s/:$//')"
+cleanup() {
+    if [ -r "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
+        rm -rf "$LOCK_DIR"
     fi
-    ip link add wlan0 type dummy
-    ip link set wlan0 address "$REAL_MAC"
-    ip link set wlan0 up
-    log_message "Created dummy wlan0 with MAC: $REAL_MAC"
-fi
+}
 
-# 单例锁文件路径（防止重复运行）
-LOCK_FILE="/var/run/acc_daemon.lock"
+trap cleanup 0
+trap 'exit 0' HUP INT TERM
 
-# 守护的进程列表
-# 格式：进程名:匹配参数:启动命令
-if [ "${run_env}" = "test" ]; then
-    PROCESS_DATA="
-    acc-gw.router.${arch}:-d debug -r daemon:${BASE_PATH}/acc-gw.router.${arch} -d debug -r daemon -m tun -p 5588
-    "
-    UPGRADE_PROCESS_DATA="
-    acc_upgrade_monitor:-d debug -r upgrade:${BASE_PATH}/acc_upgrade_monitor -d debug -r upgrade
-    "
-else
-    PROCESS_DATA="
-    acc-gw.router.${arch}:-r daemon:${BASE_PATH}/acc-gw.router.${arch} -r daemon -m tun -p 5588
-    "
-    UPGRADE_PROCESS_DATA="
-    acc_upgrade_monitor:-r upgrade:${BASE_PATH}/acc_upgrade_monitor -r upgrade
-    "
-fi
-
-if [ "${LEIGOD_ENABLE_UPDATER:-0}" = "1" ]; then
-    PROCESS_DATA="${PROCESS_DATA}${UPGRADE_PROCESS_DATA}"
-    log_message "WARNING: automatic upstream updater enabled; downloaded updates are not verified by checksums.sha256"
-else
-    log_message "Automatic upstream updater disabled; update through the verified installer"
-fi
-
-# 检查是否已有实例在运行
-if [ -f "$LOCK_FILE" ]; then
-    if kill -0 "$(cat "$LOCK_FILE")" 2>/dev/null; then
-        log_message "[Monitor] Daemon is already running (PID: $(cat "$LOCK_FILE")). Exiting."
+case $(uname -m) in
+    x86_64) arch=amd64 ;;
+    *)
+        log_message "Unsupported architecture: $(uname -m)"
         exit 1
-    else
-        # 锁文件存在但进程已死，清理锁文件
-        log_message "[Monitor] Removing stale lock file"
-        rm -f "$LOCK_FILE"
-    fi
-fi
+        ;;
+esac
 
-# 创建锁文件（写入当前PID）
-echo $$ > "$LOCK_FILE"
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR"
+mkdir -p "$ACC_TMP_DIR/log"
+chmod 0700 "$ACC_TMP_DIR" "$ACC_TMP_DIR/log"
 
-# 检查进程是否存在（精确匹配参数）
-is_process_running() {
-    process_name="$1"
-    pattern="$2"
-
-    # 使用 pidof 获取进程PID
-    pids=$(pidof "$process_name" 2>/dev/null)
-    if [ -z "$pids" ]; then
-        return 1
-    fi
-
-    # 遍历所有PID，检查命令行参数是否匹配
-    for pid in $pids; do
-        if [ -f "/proc/$pid/cmdline" ]; then
-            # 读取进程命令行，将 \0 替换为空格
-            cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
-            if echo "$cmdline" | grep -qF -- "$pattern"; then
-                return 0
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    old_pid=
+    [ ! -r "$LOCK_DIR/pid" ] || old_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    case "$old_pid" in
+        ''|*[!0-9]*) ;;
+        *)
+            if kill -0 "$old_pid" 2>/dev/null; then
+                log_message "Monitor is already running with PID $old_pid"
+                exit 1
             fi
+            ;;
+    esac
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || {
+        log_message "Unable to acquire monitor lock"
+        exit 1
+    }
+fi
+printf '%s\n' "$$" > "$LOCK_DIR/pid"
+
+DEVICE_MAC=$(LEIGOD_STATE_DIR=${LEIGOD_STATE_DIR:-/var/lib/leigod} \
+    "$BASE_PATH/device-mac.sh") || exit 1
+
+setup_wlan0() {
+    if ! ip link show wlan0 >/dev/null 2>&1; then
+        ip link add wlan0 type dummy || {
+            log_message "Unable to create dummy wlan0; check dummy kernel support and CAP_NET_ADMIN"
+            return 1
+        }
+    elif ! ip -d link show wlan0 2>/dev/null | grep -qw dummy; then
+        log_message "Existing wlan0 is a physical interface; its MAC is managed externally"
+        log_message "Disable NetworkManager MAC randomization before binding (see README)"
+        return 0
+    fi
+
+    current_mac=$(cat /sys/class/net/wlan0/address 2>/dev/null || true)
+    if [ "$current_mac" != "$DEVICE_MAC" ]; then
+        ip link set wlan0 down || return 1
+        ip link set wlan0 address "$DEVICE_MAC" || return 1
+    fi
+    ip link set wlan0 up || return 1
+    log_message "Stable dummy wlan0 ready with MAC $DEVICE_MAC"
+}
+
+setup_wlan0 || exit 1
+
+is_process_running() {
+    process_name=$1
+    pattern=$2
+    pids=$(pgrep -f "$process_name" 2>/dev/null || true)
+    [ -n "$pids" ] || return 1
+
+    for pid in $pids; do
+        case "$pid" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        if [ -r "/proc/$pid/cmdline" ]; then
+            cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            case "$cmdline" in
+                *"$pattern"*) return 0 ;;
+            esac
         fi
     done
     return 1
 }
 
-log_message "Monitor daemon started (PID: $$)"
-log_message "Monitoring processes:"
+start_main_daemon() {
+    if [ "$run_env" = "test" ]; then
+        "$BASE_PATH/acc-gw.router.$arch" -d debug -r daemon -m tun -p 5588 \
+            >/dev/null 2>&1 </dev/null &
+    else
+        "$BASE_PATH/acc-gw.router.$arch" -r daemon -m tun -p 5588 \
+            >/dev/null 2>&1 </dev/null &
+    fi
+    sleep 2
+    is_process_running "acc-gw.router.$arch" "-r daemon"
+}
 
-# 主循环
-while true; do
-    # 判断是否正在升级，如果在升级则退出，由 systemd 按策略处理
+start_updater() {
+    if [ "$run_env" = "test" ]; then
+        "$BASE_PATH/acc_upgrade_monitor" -d debug -r upgrade \
+            >/dev/null 2>&1 </dev/null &
+    else
+        "$BASE_PATH/acc_upgrade_monitor" -r upgrade \
+            >/dev/null 2>&1 </dev/null &
+    fi
+}
+
+case "$MAX_START_FAILURES" in
+    ''|*[!0-9]*|0) MAX_START_FAILURES=3 ;;
+esac
+case "$MAX_DAEMON_LOG_BYTES" in
+    ''|*[!0-9]*|0) MAX_DAEMON_LOG_BYTES=52428800 ;;
+esac
+
+truncate_oversized_daemon_log() {
+    daemon_log=$ACC_TMP_DIR/log/acc_daemon.log
+    [ -f "$daemon_log" ] || return 0
+    log_size=$(wc -c < "$daemon_log" 2>/dev/null || echo 0)
+    case "$log_size" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    if [ "$log_size" -gt "$MAX_DAEMON_LOG_BYTES" ]; then
+        : > "$daemon_log"
+        log_message "Truncated daemon log after it exceeded $MAX_DAEMON_LOG_BYTES bytes"
+    fi
+}
+
+failures=0
+updater_notice_written=0
+log_message "Monitor started with PID $$"
+log_message "Persistent device MAC: $DEVICE_MAC"
+
+while :; do
     if [ -f "$UPGRADE_FLAG" ]; then
-        log_message "Upgrade flag detected; monitor exiting"
+        log_message "Upgrade flag detected; exiting cleanly"
         exit 0
     fi
 
-    echo "$PROCESS_DATA" | while IFS=":" read -r process_name pattern start_cmd; do
-        # 跳过空行或空白行
-        [ -z "$(echo "$process_name" | tr -d " ")" ] && continue
-
-        # 去除可能的空格
-        process_name=$(echo "$process_name" | xargs)
-        pattern=$(echo "$pattern" | xargs)
-        start_cmd=$(echo "$start_cmd" | xargs)
-
-        # 检查进程是否存在
-        if ! is_process_running "$process_name" "$pattern"; then
-            log_message "Process not running: $process_name, starting..."
-            log_message "Start command: $start_cmd"
-
-            # 命令内容由上面的静态 PROCESS_DATA 构造，不接受外部输入。
-            # shellcheck disable=SC2086
-            $start_cmd >/dev/null 2>&1 </dev/null &
-
-            # 短暂等待，让进程启动
-            sleep 1
-
-            # 验证进程是否成功启动
-            if is_process_running "$process_name" "$pattern"; then
-                log_message "Successfully started: $process_name"
-            else
-                log_message "Failed to start: $process_name"
+    if is_process_running "acc-gw.router.$arch" "-r daemon"; then
+        failures=0
+    else
+        log_message "Main daemon is not running; starting it"
+        if start_main_daemon; then
+            failures=0
+            log_message "Main daemon started successfully"
+        else
+            failures=$((failures + 1))
+            log_message "Main daemon start failed ($failures/$MAX_START_FAILURES)"
+            if [ "$failures" -ge "$MAX_START_FAILURES" ]; then
+                log_message "Giving up so systemd can report and rate-limit the failure"
+                exit 1
             fi
         fi
-    done
+    fi
 
-    # 每5秒检查一次
+    if [ "${LEIGOD_ENABLE_UPDATER:-0}" = "1" ]; then
+        if ! is_process_running acc_upgrade_monitor "-r upgrade"; then
+            log_message "WARNING: starting unverified upstream updater"
+            start_updater
+        fi
+    elif [ "$updater_notice_written" -eq 0 ]; then
+        log_message "Automatic updater disabled; use the verified installer"
+        updater_notice_written=1
+    fi
+
+    truncate_oversized_daemon_log
     sleep 5
 done

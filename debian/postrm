@@ -1,30 +1,23 @@
 #!/bin/sh
-set -e
+set -eu
 
 case "$1" in
     remove|abort-install|abort-upgrade|disappear)
-        rm -f /etc/systemd/system/leigod_plugin.service
         systemctl daemon-reload 2>/dev/null || true
-
-        if [ -L /home/leigod ] && [ "$(readlink /home/leigod)" = "/opt/leigod" ]; then
+        if [ -L /home/leigod ] && [ "$(readlink /home/leigod)" = /opt/leigod ]; then
             rm -f /home/leigod
         fi
+        rm -rf /run/leigod
         ;;
-
     purge)
-        if [ -L /home/leigod ] && [ "$(readlink /home/leigod)" = "/opt/leigod" ]; then
+        if [ -L /home/leigod ] && [ "$(readlink /home/leigod)" = /opt/leigod ]; then
             rm -f /home/leigod
         fi
-
-        rm -rf /tmp/acc
-
-        rm -f /etc/systemd/system/leigod_plugin.service
+        rm -rf /run/leigod /var/lib/leigod
         systemctl daemon-reload 2>/dev/null || true
         ;;
-
     upgrade|failed-upgrade)
         ;;
-
     *)
         echo "postrm called with unknown argument: $1" >&2
         exit 1

@@ -1,0 +1,37 @@
+name: Source release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Verify version tag
+        run: |
+          . ./release.env
+          test "$GITHUB_REF_NAME" = "v$PACKAGE_VERSION"
+      - name: Build reproducible source archive
+        run: |
+          . ./release.env
+          archive="leigod-plugin-${PACKAGE_VERSION}-source.tar.gz"
+          git archive --format=tar --prefix="leigod-plugin-${PACKAGE_VERSION}/" "$GITHUB_SHA" | gzip -n > "$archive"
+          sha256sum "$archive" > SHA256SUMS
+      - name: Publish source-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./release.env
+          gh release create "$GITHUB_REF_NAME" \
+            "leigod-plugin-${PACKAGE_VERSION}-source.tar.gz" SHA256SUMS \
+            --verify-tag --generate-notes \
+            --title "Leigod Plugin $PACKAGE_VERSION (source only)"

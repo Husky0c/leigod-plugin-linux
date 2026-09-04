@@ -1,6 +1,8 @@
 # Leigod Plugin — SteamDeck 网络加速器 | 通用 Linux 移植版
 
-[雷神加速器](https://www.leigod.com) 的 SteamDeck 插件，伪装后可在 **x86_64 Linux 发行版**（Ubuntu / Debian / Fedora / Arch / openSUSE 等）上运行。伪装为 SteamDeck 硬件，通过手机 App 绑定后即可对游戏进行网络加速。
+[雷神加速器](https://www.leigod.com) 的 SteamDeck 插件兼容层，面向使用 systemd 的、
+可变更系统分区的 **x86_64 Linux**。通过外部环境模拟 SteamDeck 硬件后，可使用手机
+App 绑定并启动网络加速。
 
 ## 原理
 
@@ -8,19 +10,33 @@
 |------|------|
 | **硬件伪装** | systemd `BindReadOnlyPaths` 劫持 `/sys/class/dmi/id/product_name` → `Jupiter` |
 | **系统伪装** | 同上劫持 `/etc/os-release` → `SteamOS` |
-| **网卡伪装** | 创建 `dummy` 类型虚拟 `wlan0`，克隆物理网卡 MAC |
+| **网卡伪装** | 创建 `dummy` 类型虚拟 `wlan0`，使用持久化的本机专属 MAC |
 | **路径修复** | `/home/leigod` → `/opt/leigod` 符号链接 |
 | **进程管理** | systemd `KillMode=control-group` 确保重启时清理所有子进程 |
 
 > **本项目的技术定位：** 仅通过 systemd 的 `BindReadOnlyPaths` 和网络层配置（创建 dummy 接口）在**外部模拟** SteamDeck 运行环境。未对雷神核心二进制（`acc-gw.router.amd64`）进行任何逆向分析、修改或破解。
 
-## 系统要求
+## 系统要求与支持范围
 
-- **架构**: x86_64 (amd64)
-- **内核**: Linux（支持 `dummy`、`tun`、`iptables` 模块）
-- **init**: systemd v227+
-- **依赖**: `ipset`、`curl`，以及 `sha256sum` 或 `shasum`
-- **安装/构建时需要互联网连接**（自动从雷神服务器下载二进制）
+- **架构**：仅 x86_64（amd64）；
+- **init**：正在运行的 systemd 249 或更高版本；
+- **内核能力**：`dummy`、TUN（必须存在 `/dev/net/tun`）、netfilter/iptables；
+- **用户空间依赖**：`curl`、`ip`、`ipset`、`iptables`、`pgrep`、
+  `sha256sum`；安装脚本会按发行版安装对应软件包；
+- **网络**：安装或构建时需要连接雷神下载服务器。
+
+当前宿主机安装脚本只支持以下可变更系统：
+
+| 系列 | 包管理器 | 状态 |
+|---|---|---|
+| Debian / Ubuntu | `apt-get` | 支持 |
+| Fedora | `dnf` | 支持 |
+| Arch Linux | `pacman` | 支持 |
+| openSUSE | `zypper` | 支持 |
+
+Bazzite、Fedora Silverblue/Kinoite、CoreOS、bootc 等 Atomic/不可变发行版不支持
+直接运行本安装脚本。脚本会在修改系统前拒绝这些环境；建议使用独立的、可变更的
+Linux 系统或虚拟机。
 
 ## 快速安装
 
@@ -33,6 +49,10 @@ sudo ./install.sh
 安装脚本会下载雷神文件，在执行或安装前使用仓库固定的 SHA-256 进行校验。校验失败时安装会立即终止，原有已安装文件不会被替换。
 
 安装后打开手机雷神加速器 App → 绑定设备 → 开始加速。
+
+首次启动会根据 `/etc/machine-id` 生成一个本地管理、单播 MAC，并保存到
+`/var/lib/leigod/device-mac`。它不再复制 NetworkManager 可能随机化的物理网卡
+MAC，因此重启服务或重新安装后设备身份保持不变。
 
 ## 下载安全
 
@@ -59,8 +79,11 @@ leigod-plugin-linux/
 ├── install.sh                    # 通用安装脚本
 ├── uninstall.sh                  # 通用卸载脚本
 ├── checksums.sha256              # 固定的上游文件 SHA-256
+├── release.env                   # 版本与可复现构建时间戳
+├── THIRD_PARTY_NOTICES.md        # 第三方文件及许可边界
 ├── scripts/
-│   └── fetch-assets.sh           # 下载、校验与原子安装
+│   ├── fetch-assets.sh           # 下载、校验与原子安装
+│   └── device-mac.sh             # 生成并持久化设备 MAC
 ├── opt/leigod/
 │   ├── acc-gw.router.amd64       # 雷神加速主程序（下载时获取）
 │   ├── acc_upgrade_monitor       # 升级程序副本（默认不启动）
@@ -76,7 +99,9 @@ leigod-plugin-linux/
 │       └── ipdatacloud_country.xdb  # IP 地理位置数据库（下载时获取）
 ├── systemd/
 │   └── leigod_plugin.service     # systemd 服务单元
-├── debian/                       # dpkg-deb 打包文件
+├── debian/                       # dpkg-deb 元数据和维护脚本
+├── tests/                        # 自动测试
+├── .github/workflows/            # CI 与源码 Release 工作流
 └── packages/
     ├── build-deb.sh              # 构建 .deb 包
     └── build-tar.sh              # 构建 .tar.gz 包
@@ -91,6 +116,11 @@ sudo systemctl stop    leigod_plugin.service
 sudo journalctl -xeu   leigod_plugin.service
 ```
 
+监控脚本直接写入 journald，不再无限追加自己的日志文件。systemd 负责日志轮转；
+闭源程序需要的 `/tmp/acc` 位于 `PrivateTmp` 隔离空间、权限为 `0700`，其主日志默认
+超过 50 MiB 时截断。服务锁位于权限为 `0700` 的 `/run/leigod`，并通过原子目录
+创建；设备 MAC 位于 `/var/lib/leigod`，用于跨重装保持身份。
+
 ## 卸载
 
 ```bash
@@ -99,6 +129,12 @@ sudo ./uninstall.sh
 ```
 
 卸载脚本不会清空宿主机共享的 iptables 表。服务会先收到停止信号，以便核心程序清理其规则；如异常退出后网络状态仍有残留，安全做法是重启系统，不要执行 `iptables -t mangle -F`。
+
+默认卸载会保留 `/var/lib/leigod/device-mac`。如需同时清除绑定身份：
+
+```bash
+sudo LEIGOD_PURGE_STATE=1 ./uninstall.sh
+```
 
 ## 从零构建安装包
 
@@ -112,6 +148,13 @@ bash build-tar.sh
 
 构建产物输出到 `packages/` 目录。
 
+构建器使用固定的上游 SHA-256、统一文件时间戳、排序和数字所有者信息，确保相同
+源码及相同 `release.env` 可以生成相同产物。CI 会验证 Shell 语法、MAC 稳定性、
+下载篡改失败保护以及 TAR 包可复现性。
+
+带版本标签的 GitHub Actions Release 只发布可复现的**源码包**。包含雷神二进制的
+DEB/TAR 仅供本地构建；未取得权利人明确许可前，不应公开再分发。
+
 ## 常见问题
 
 **Q: 下载文件提示 SHA-256 mismatch？**  
@@ -121,7 +164,6 @@ bash build-tar.sh
 
 ```bash
 journalctl -xeu leigod_plugin.service
-tail -f /tmp/acc/log/acc_daemon.log
 ```
 
 **Q: 重启后加速失效？**  
@@ -131,13 +173,20 @@ tail -f /tmp/acc/log/acc_daemon.log
 不能。雷神官方只提供了 amd64 二进制。
 
 **Q: 更换网卡后绑定会丢失吗？**  
-MAC 地址回退到 `/etc/machine-id` 派生值，只要系统未重装则不变。绑定信息同时保存在雷神云端。
+虚拟 `wlan0` 使用 `/var/lib/leigod/device-mac` 中的持久 MAC，与物理网卡无关。
+如果系统本身已有名为 `wlan0` 的物理无线接口，脚本不会擅自修改它；绑定前需在
+NetworkManager 中为该连接关闭 MAC 随机化。Issue
+[#1](https://github.com/Husky0c/leigod-plugin-linux/issues/1) 记录了这一情况。
 
 ## 免责声明
 
 本仓库**不含**雷神官方二进制文件，也未对雷神核心程序进行任何逆向分析、修改或破解。所有脚本仅通过 systemd 的 `BindReadOnlyPaths` 和网络层配置（创建 dummy 接口）在**外部模拟** SteamDeck 运行环境，使未修改的雷神官方二进制在普通 PC 上正常运行。
 
-`acc-gw.router.amd64` 和 `ipdatacloud_country.xdb` 由安装/构建脚本下载并校验，版权归雷神所有。使用雷神服务需遵守其服务条款。
+`acc-gw.router.amd64` 和 `ipdatacloud_country.xdb` 由安装/构建脚本下载并校验，
+版权归雷神所有。仓库根目录 MIT License 只覆盖本项目原创代码，不覆盖雷神二进制、
+数据库、配置或上游衍生内容；具体边界见
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。使用及再分发前需遵守雷神
+服务条款并取得必要授权。
 
 本项目仅供学习研究。请遵守当地法律法规。
 

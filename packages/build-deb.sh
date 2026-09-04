@@ -1,41 +1,61 @@
 #!/bin/sh
-set -e
+set -eu
 
-REPO_DIR="$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="/tmp/opencode/leigod-plugin-build"
-OUTPUT="$REPO_DIR/packages/leigod-plugin_1.2.2.15_amd64.deb"
+umask 077
 
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/DEBIAN" "$BUILD_DIR/opt/leigod/config" "$BUILD_DIR/usr/share/doc/leigod-plugin"
+REPO_DIR=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC1091
+. "$REPO_DIR/release.env"
 
-# Download both assets, verify pinned SHA-256 values, then install atomically.
-LEIGOD_CHECKSUM_FILE=${LEIGOD_CHECKSUM_FILE:-$REPO_DIR/checksums.sha256} \
+CHECKSUM_FILE=${LEIGOD_CHECKSUM_FILE:-$REPO_DIR/checksums.sha256}
+BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/leigod-plugin-deb.XXXXXX")
+OUTPUT=$REPO_DIR/packages/leigod-plugin_${PACKAGE_VERSION}_amd64.deb
+OUTPUT_TMP=$OUTPUT.tmp.$$
+
+cleanup() {
+    rm -rf "$BUILD_DIR"
+    rm -f "$OUTPUT_TMP"
+}
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+
+command -v dpkg-deb >/dev/null 2>&1 || {
+    echo "[ERROR] dpkg-deb is required" >&2
+    exit 1
+}
+
+install -d -m 0755 \
+    "$BUILD_DIR/DEBIAN" \
+    "$BUILD_DIR/lib/systemd/system" \
+    "$BUILD_DIR/opt/leigod/config" \
+    "$BUILD_DIR/usr/share/doc/leigod-plugin"
+
+LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
     sh "$REPO_DIR/scripts/fetch-assets.sh" "$BUILD_DIR/opt/leigod"
 
-# Copy files
-cp "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BUILD_DIR/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$BUILD_DIR/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/fake_os-release" "$BUILD_DIR/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/fake_product_name" "$BUILD_DIR/opt/leigod/"
-cp "$REPO_DIR/opt/leigod/config/acc_version.ini" "$BUILD_DIR/opt/leigod/config/"
-cp "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$BUILD_DIR/opt/leigod/config/"
-cp "$REPO_DIR/opt/leigod/config/accelerator.ini" "$BUILD_DIR/opt/leigod/config/"
-cp "$REPO_DIR/checksums.sha256" "$BUILD_DIR/usr/share/doc/leigod-plugin/"
-touch "$BUILD_DIR/opt/leigod/config/accelerator"
+install -m 0755 "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BUILD_DIR/opt/leigod/"
+install -m 0755 "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$BUILD_DIR/opt/leigod/"
+install -m 0755 "$REPO_DIR/scripts/device-mac.sh" "$BUILD_DIR/opt/leigod/"
+install -m 0644 "$REPO_DIR/opt/leigod/fake_os-release" "$BUILD_DIR/opt/leigod/"
+install -m 0644 "$REPO_DIR/opt/leigod/fake_product_name" "$BUILD_DIR/opt/leigod/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/acc_version.ini" "$BUILD_DIR/opt/leigod/config/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$BUILD_DIR/opt/leigod/config/"
+install -m 0644 "$REPO_DIR/opt/leigod/config/accelerator.ini" "$BUILD_DIR/opt/leigod/config/"
+: > "$BUILD_DIR/opt/leigod/config/accelerator"
+chmod 0644 "$BUILD_DIR/opt/leigod/config/accelerator"
 
-# Debian control files
-cp "$REPO_DIR/debian/control" "$BUILD_DIR/DEBIAN/"
-cp "$REPO_DIR/debian/preinst" "$BUILD_DIR/DEBIAN/"
-cp "$REPO_DIR/debian/postinst" "$BUILD_DIR/DEBIAN/"
-cp "$REPO_DIR/debian/prerm" "$BUILD_DIR/DEBIAN/"
-cp "$REPO_DIR/debian/postrm" "$BUILD_DIR/DEBIAN/"
+install -m 0644 "$REPO_DIR/systemd/leigod_plugin.service" "$BUILD_DIR/lib/systemd/system/"
+install -m 0644 "$CHECKSUM_FILE" "$BUILD_DIR/usr/share/doc/leigod-plugin/checksums.sha256"
+install -m 0644 "$REPO_DIR/LICENSE" "$BUILD_DIR/usr/share/doc/leigod-plugin/copyright"
+install -m 0644 "$REPO_DIR/THIRD_PARTY_NOTICES.md" "$BUILD_DIR/usr/share/doc/leigod-plugin/"
 
-# Permissions
-chmod 755 "$BUILD_DIR/DEBIAN/preinst" "$BUILD_DIR/DEBIAN/postinst"
-chmod 755 "$BUILD_DIR/DEBIAN/prerm" "$BUILD_DIR/DEBIAN/postrm"
-chmod 755 "$BUILD_DIR/opt/leigod/acc-gw.router.amd64" "$BUILD_DIR/opt/leigod/acc_upgrade_monitor"
-chmod 755 "$BUILD_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BUILD_DIR/opt/leigod/leigod_uninstall.sh"
+for control_file in control preinst postinst prerm postrm; do
+    install -m 0755 "$REPO_DIR/debian/$control_file" "$BUILD_DIR/DEBIAN/$control_file"
+done
+chmod 0644 "$BUILD_DIR/DEBIAN/control"
 
-fakeroot dpkg-deb --build "$BUILD_DIR" "$OUTPUT"
-rm -rf "$BUILD_DIR"
-echo "Built: $OUTPUT"
+export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C
+find "$BUILD_DIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+dpkg-deb --root-owner-group --build "$BUILD_DIR" "$OUTPUT_TMP"
+mv -f "$OUTPUT_TMP" "$OUTPUT"
+echo "Built reproducibly: $OUTPUT"

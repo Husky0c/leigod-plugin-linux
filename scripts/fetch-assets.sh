@@ -102,9 +102,12 @@ fetch_and_verify "acc-gw.router.amd64" "acc-gw.router.amd64" "$WORK_DIR/acc-gw.r
 fetch_and_verify "ipdatacloud_country.xdb" "config/ipdatacloud_country.xdb" "$WORK_DIR/ipdatacloud_country.xdb"
 
 mkdir -p "$DEST_ROOT/config"
-ACC_STAGE=$DEST_ROOT/.acc-gw.router.amd64.new.$$
-UPGRADE_STAGE=$DEST_ROOT/.acc_upgrade_monitor.new.$$
-XDB_STAGE=$DEST_ROOT/config/.ipdatacloud_country.xdb.new.$$
+ACC_STAGE=$(mktemp "$DEST_ROOT/.acc-gw.router.amd64.XXXXXX") \
+    || die "Failed to create gateway staging file"
+UPGRADE_STAGE=$(mktemp "$DEST_ROOT/.acc_upgrade_monitor.XXXXXX") \
+    || die "Failed to create updater staging file"
+XDB_STAGE=$(mktemp "$DEST_ROOT/config/.ipdatacloud_country.xdb.XXXXXX") \
+    || die "Failed to create database staging file"
 
 cp "$WORK_DIR/acc-gw.router.amd64" "$ACC_STAGE"
 chmod 0755 "$ACC_STAGE"
