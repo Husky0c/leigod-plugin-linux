@@ -1,0 +1,30 @@
+# Downloaded binaries (not tracked in git, downloaded at install/build time)
+acc-gw.router.*
+ipdatacloud_country.xdb
+
+# Build artifacts
+packages/*.deb
+packages/*.tar.gz
+*.deb
+*.tar.gz
+
+# Temp files
+/tmp/
+/tmp/acc/
+logs
+config
+
+# Editor backups
+*~
+*.swp
+*.swo
+\#*\#
+.\#*
+
+# github actions
+.github
+
+# non-build
+docker-compose.yml
+Dockerfile
+*.md

@@ -3,6 +3,12 @@ set -eu
 
 umask 022
 
+INSTALLED_IN_CONTAINER="${LEIGOD_INSTALLED_IN_CONTAINER:-0}"
+case "$INSTALLED_IN_CONTAINER" in
+    1|true|TRUE|yes|YES) INSTALLED_IN_CONTAINER=1 ;;
+    *) INSTALLED_IN_CONTAINER=0 ;;
+esac
+
 BASE=/opt/leigod
 SERVICE_NAME=leigod_plugin.service
 SERVICE_FILE=/etc/systemd/system/$SERVICE_NAME
@@ -54,7 +60,7 @@ trap 'exit 1' HUP INT TERM
 [ "$(id -u)" -eq 0 ] || error "Please run as root (sudo ./install.sh)"
 [ "$(uname -m)" = x86_64 ] || error "Only x86_64 is supported; current: $(uname -m)"
 command -v systemctl >/dev/null 2>&1 || error "systemctl is required"
-[ -d /run/systemd/system ] || error "A running systemd system instance is required"
+[ -d /run/systemd/system ] || [ "$INSTALLED_IN_CONTAINER" = "1" ] || error "A running systemd system instance is required"
 
 detect_platform() {
     ID=
@@ -116,7 +122,7 @@ verify_runtime() {
         fi
     done
     [ -z "$missing" ] || error "Missing required commands:$missing"
-    [ -c /dev/net/tun ] || error "/dev/net/tun is unavailable; load the tun module before installing"
+    [ -c /dev/net/tun ] || [ "$INSTALLED_IN_CONTAINER" = "1" ] || error "/dev/net/tun is unavailable; load the tun module before installing"
 }
 
 stop_existing_service() {
@@ -176,6 +182,11 @@ create_symlink() {
 setup_service() {
     info "Installing the hardened systemd service..."
     install -m 0644 "$SCRIPT_DIR/systemd/leigod_plugin.service" "$SERVICE_FILE"
+
+    if [ "$INSTALLED_IN_CONTAINER" = "1" ]; then
+        info "Skipping systemd activation (LEIGOD_INSTALLED_IN_CONTAINER=1)."
+        return
+    fi
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
 }
@@ -185,6 +196,11 @@ main_daemon_running() {
 }
 
 start_service() {
+    if [ "$INSTALLED_IN_CONTAINER" = "1" ]; then
+        info "Skipping service start (LEIGOD_INSTALLED_IN_CONTAINER=1)."
+        return
+    fi
+
     info "Starting Leigod Plugin Service..."
     systemctl restart "$SERVICE_NAME" || error "Failed to start $SERVICE_NAME"
 

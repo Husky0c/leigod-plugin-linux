@@ -72,6 +72,16 @@ MAC，因此重启服务或重新安装后设备身份保持不变。
 Environment=LEIGOD_ENABLE_UPDATER=1
 ```
 
+## Docker / Docker Compose 运行环境
+
+项目已包含可直接使用的容器化运行环境，适合在不修改宿主机系统的前提下进行安装、调试和验证。
+
+```bash
+docker compose build
+docker compose up -d
+docker compose exec leigod-plugin bash
+```
+
 ## 文件结构
 
 ```text

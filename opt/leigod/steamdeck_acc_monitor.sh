@@ -12,6 +12,10 @@ MAX_START_FAILURES=${LEIGOD_MAX_START_FAILURES:-3}
 MAX_DAEMON_LOG_BYTES=${LEIGOD_MAX_DAEMON_LOG_BYTES:-52428800}
 run_env=${1:-}
 
+# 新增：用于保存子进程 PID 的全局变量
+MAIN_PID=""
+UPGRADE_PID=""
+
 log_message() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -22,8 +26,45 @@ cleanup() {
     fi
 }
 
+# 新增：自定义 SIGTERM 处理函数
+sigterm_handler() {
+    log_message "Received SIGTERM, stopping child processes gracefully"
+    cleanup  # 删除锁文件
+
+    # 向主程序发送 SIGTERM（如果 PID 存在）
+    if [ -n "$MAIN_PID" ] && kill -0 "$MAIN_PID" 2>/dev/null; then
+        log_message "Sending SIGTERM to main daemon (PID $MAIN_PID)"
+        kill -TERM "$MAIN_PID" 2>/dev/null
+    fi
+
+    # 向升级监控进程发送 SIGTERM（如果 PID 存在）
+    if [ -n "$UPGRADE_PID" ] && kill -0 "$UPGRADE_PID" 2>/dev/null; then
+        log_message "Sending SIGTERM to updater (PID $UPGRADE_PID)"
+        kill -TERM "$UPGRADE_PID" 2>/dev/null
+    fi
+
+    # 等待最多 3 秒，让子进程有机会退出
+    sleep 3
+
+    # 如果主程序仍在运行，强制杀死
+    if [ -n "$MAIN_PID" ] && kill -0 "$MAIN_PID" 2>/dev/null; then
+        log_message "Main daemon did not exit, sending SIGKILL"
+        kill -KILL "$MAIN_PID" 2>/dev/null
+    fi
+
+    if [ -n "$UPGRADE_PID" ] && kill -0 "$UPGRADE_PID" 2>/dev/null; then
+        log_message "Updater did not exit, sending SIGKILL"
+        kill -KILL "$UPGRADE_PID" 2>/dev/null
+    fi
+
+    log_message "Monitor exiting after SIGTERM"
+    exit 0
+}
+
+# 清理锁（正常退出时）
 trap cleanup 0
-trap 'exit 0' HUP INT TERM
+# 捕获 SIGTERM、SIGINT、SIGHUP，使用自定义处理函数
+trap sigterm_handler TERM INT HUP
 
 case $(uname -m) in
     x86_64) arch=amd64 ;;
@@ -112,6 +153,7 @@ start_main_daemon() {
         "$BASE_PATH/acc-gw.router.$arch" -r daemon -m tun -p 5588 \
             >/dev/null 2>&1 </dev/null &
     fi
+    MAIN_PID=$!   # 记录主进程 PID
     sleep 2
     is_process_running "acc-gw.router.$arch" "-r daemon"
 }
@@ -124,6 +166,7 @@ start_updater() {
         "$BASE_PATH/acc_upgrade_monitor" -r upgrade \
             >/dev/null 2>&1 </dev/null &
     fi
+    UPGRADE_PID=$!   # 记录更新监控进程 PID
 }
 
 case "$MAX_START_FAILURES" in
