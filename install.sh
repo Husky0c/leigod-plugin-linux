@@ -150,6 +150,9 @@ download_binaries() {
 install_files() {
     info "Installing files to $BASE..."
     install -d -m 0755 "$BASE/config"
+    install -d -m 0755 "$BASE/compat"
+    install -m 0755 "$SCRIPT_DIR/opt/leigod/compat/ps" "$BASE/compat/"
+    install -m 0755 "$SCRIPT_DIR/opt/leigod/compat/uci" "$BASE/compat/"
     install -m 0755 "$SCRIPT_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BASE/"
     install -m 0755 "$SCRIPT_DIR/opt/leigod/leigod_uninstall.sh" "$BASE/"
     install -m 0755 "$SCRIPT_DIR/scripts/device-mac.sh" "$BASE/"

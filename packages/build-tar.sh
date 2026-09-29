@@ -23,6 +23,7 @@ trap 'exit 1' HUP INT TERM
 
 install -d -m 0755 \
     "$PACKAGE_ROOT/opt/leigod/config" \
+    "$PACKAGE_ROOT/opt/leigod/compat" \
     "$PACKAGE_ROOT/scripts" \
     "$PACKAGE_ROOT/systemd"
 
@@ -31,6 +32,8 @@ LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
 
 install -m 0755 "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/"
 install -m 0755 "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/ps" "$PACKAGE_ROOT/opt/leigod/compat/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/uci" "$PACKAGE_ROOT/opt/leigod/compat/"
 install -m 0755 "$REPO_DIR/scripts/device-mac.sh" "$PACKAGE_ROOT/scripts/"
 install -m 0755 "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/scripts/"
 install -m 0644 "$REPO_DIR/opt/leigod/fake_os-release" "$PACKAGE_ROOT/opt/leigod/"

@@ -28,6 +28,7 @@ install -d -m 0755 \
     "$BUILD_DIR/DEBIAN" \
     "$BUILD_DIR/lib/systemd/system" \
     "$BUILD_DIR/opt/leigod/config" \
+    "$BUILD_DIR/opt/leigod/compat" \
     "$BUILD_DIR/usr/share/doc/leigod-plugin"
 
 LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
@@ -35,6 +36,8 @@ LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
 
 install -m 0755 "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$BUILD_DIR/opt/leigod/"
 install -m 0755 "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$BUILD_DIR/opt/leigod/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/ps" "$BUILD_DIR/opt/leigod/compat/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/uci" "$BUILD_DIR/opt/leigod/compat/"
 install -m 0755 "$REPO_DIR/scripts/device-mac.sh" "$BUILD_DIR/opt/leigod/"
 install -m 0644 "$REPO_DIR/opt/leigod/fake_os-release" "$BUILD_DIR/opt/leigod/"
 install -m 0644 "$REPO_DIR/opt/leigod/fake_product_name" "$BUILD_DIR/opt/leigod/"
