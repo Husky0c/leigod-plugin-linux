@@ -11,6 +11,18 @@ grep -q 'RuntimeDirectory=leigod' systemd/leigod_plugin.service
 grep -q 'StateDirectory=leigod' systemd/leigod_plugin.service
 grep -q 'Restart=on-failure' systemd/leigod_plugin.service
 grep -q 'MAX_DAEMON_LOG_BYTES=.*52428800' opt/leigod/steamdeck_acc_monitor.sh
+grep -q 'LEIGOD_MAX_WEB_CRASHES' opt/leigod/steamdeck_acc_monitor.sh
+grep -q 'recycle_accelerator_daemon' opt/leigod/steamdeck_acc_monitor.sh
+grep -q 'PATH=\$BASE_PATH/compat:\$PATH' opt/leigod/steamdeck_acc_monitor.sh
+[ -x opt/leigod/compat/ps ] || {
+    echo "missing the ps compatibility shim" >&2
+    exit 1
+}
+[ -x opt/leigod/compat/uci ] || {
+    echo "missing the uci compatibility shim" >&2
+    exit 1
+}
+grep -q 'log_binding_state' opt/leigod/steamdeck_acc_monitor.sh
 grep -q '/var/lib/leigod/device-mac' README.md
 grep -q 'Bazzite' README.md
 grep -q 'THIRD_PARTY_NOTICES.md' README.md
