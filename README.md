@@ -91,6 +91,9 @@ leigod-plugin-linux/
 │   ├── leigod_uninstall.sh       # 安全卸载脚本
 │   ├── fake_os-release           # 伪造 SteamOS 信息
 │   ├── fake_product_name         # 伪造 Jupiter 硬件名
+│   ├── compat/
+│   │   ├── ps                    # BusyBox 风格 ps 兼容层（新版上游需要）
+│   │   └── uci                   # uci 兼容层，保存/镜像绑定令牌（新版上游需要）
 │   └── config/
 │       ├── accelerator.ini       # 雷神加速器配置
 │       ├── accelerator           # OpenWrt 兼容占位文件
@@ -120,6 +123,17 @@ sudo journalctl -xeu   leigod_plugin.service
 闭源程序需要的 `/tmp/acc` 位于 `PrivateTmp` 隔离空间、权限为 `0700`，其主日志默认
 超过 50 MiB 时截断。服务锁位于权限为 `0700` 的 `/run/leigod`，并通过原子目录
 创建；设备 MAC 位于 `/var/lib/leigod`，用于跨重装保持身份。
+
+监控脚本还会跟踪闭源程序 fork 出的 `-r web` 工作进程（手机 App 的本地接口）。该
+进程会因上游缺陷（见 Issue #5）反复以 SIGABRT 退出，而主程序往往在旧进程仍占用端
+口时立刻补拉一个新进程，把单次失败放大成崩溃循环。检测到这种循环后，脚本会先回收
+整套加速进程（`-r daemon` 与 `-r web`）再重新拉起，并把 `/tmp/acc/log` 的末尾若干
+行写入 journald；如果长时间无法稳定，则主动退出，让 systemd 在 `systemctl status`
+中明确报错并限流，而不是把崩溃隐藏在“运行中”的状态里。启动时脚本还会把**绑定令牌是否存在**
+写进 journald（只报位置、不打印令牌内容），方便判断「云端有记录但连不上」到底是设备侧没有
+令牌，还是本地接口在崩溃循环。阈值可通过环境变量调整：
+`LEIGOD_MAX_WEB_CRASHES`（默认 3 次）、`LEIGOD_WEB_CRASH_WINDOW`（默认 900 秒）、
+`LEIGOD_MAX_WEB_RECOVERIES`（默认 5 次）。
 
 ## 卸载
 
@@ -164,6 +178,104 @@ DEB/TAR 仅供本地构建；未取得权利人明确许可前，不应公开再
 
 ```bash
 journalctl -xeu leigod_plugin.service
+```
+
+**Q: `systemctl status` 里反复出现 `acc-gw.router.amd64 ... dumped core`？**
+
+这是雷神闭源主程序的 `-r web` 工作进程在上游崩溃——未捕获的
+`websocketpp::exception ... invalid state` 触发 SIGABRT（记录于 Issue
+[#5](https://github.com/Husky0c/leigod-plugin-linux/issues/5)），不是本项目的脚本
+崩溃。该进程负责手机 App 的本地接口，所以崩溃循环期间 App 会连不上：`5588` 端口虽
+然在 LISTEN，但请求得不到响应（`curl` 报 `Empty reply from server`）。
+
+监控脚本会记录并尝试自动恢复整个加速进程，可以这样查看：
+
+```bash
+journalctl -xeu leigod_plugin.service | grep -E 'Web helper|dumped core'
+```
+
+如果恢复后仍然反复出现，说明上游进程始终无法建立到调度服务器的连接。建议在同一台
+机器上排查：本地代理 / 透明网关是否把 `box-turn.xxghh.biz`、`route-turn.xxghh.biz`
+解析或转发到了不可用的地址（例如 Clash/Mihomo 的 fake-ip 段），以及到 `:5443` 的
+TLS 连接能否正常完成。
+
+**Q: 直接用官方的 `curl route-turn.xxghh.biz/plugin_install.sh | sudo sh` 行不行？**
+
+不行，而且在普通 PC 上它**什么都不会装**。官方流程图（本仓库下载并阅读过该脚本，未执行）：
+
+1. `plugin_install.sh` 先从 `http://119.3.40.126` 下载 `plugin_common.sh` 并 source 它；
+2. `preinstall_check` 里只有三条分支：`/etc/openwrt_release` 存在 → openwrt；`/etc/image_version`、`/koolshare`、
+   `/jffs/softcenter` 存在 → asus 梅林；否则 `is_steamdeck_decice`
+   （判定条件：`/sys/class/dmi/id/product_name == Jupiter` **或** `/etc/os-release` 里出现 `steamdeck` 字样）；
+3. 三条都不满足时，`${is_openwrt}`/`${is_asus}`/`${is_steamdeck}` 都是空值，三个 `if` 全部跳过，
+   脚本直接结束 —— 不下载、不建服务、不提示。
+
+本仓库存在的意义正是**在外部把第 2 步要的这些特征伪造出来**（`BindReadOnlyPaths` 注入
+`product_name=Jupiter` 与 SteamOS 的 `/etc/os-release`，现在连 `VARIANT_ID=steamdeck` 也一并补上，
+和你手改官方脚本检测逻辑等价），再自己装一套加固过的服务。
+
+另外两点（都已实测）：
+
+- 官方 release 路径 `http://119.3.40.126/acc-gw.router.amd64` 现在就是那个**带 OpenWrt 逻辑的新版**
+  （`f81ec6a7…`，自报 1.3.0.01），也就是会崩的那个；
+- 官方 **test 路径**里还放着旧的 SteamDeck 版二进制
+  `http://119.3.40.126/router_plugin_new_test/steamdeck/acc-gw.router.amd64`
+  （6138184 字节，Last-Modified 2026-04-28，SHA-256 `8e0adbd1b1ce0d37e6588ff222408fed66a3f8954fee27bc37a10e0bf6806d4d`）——
+  正是本仓库上一版 pin 的哈希。如果将来想退回旧版，可以把 `checksums.sha256` 里
+  `acc-gw.router.amd64` 的哈希改回该值，并用
+  `LEIGOD_BASE_URL=http://119.3.40.126/router_plugin_new_test/steamdeck ./install.sh` 安装。
+
+
+
+要区分两侧状态：
+
+- **账号侧**：App 里能看到这台设备，说明云端还记着这次绑定（绑定键是本机持久化的虚拟网卡
+  MAC，见 `device MAC`，换网卡/重装都不会变）。
+- **设备侧**：App 要连上，需要同时满足
+  1. 本地接口（`5588`）活着——新版上游的 `ps` 解析 bug 会让 `-r web` 每 5 秒崩一次
+     （见上面的 BusyBox `ps` 条目，已由 `compat/ps` 修复）；
+  2. 本地能读到**绑定令牌**——新版改成通过 `uci` 存取，普通发行版没有 `uci` 就存不下来，
+     本仓库用 `compat/uci` 把令牌落在 `/opt/leigod/config/uci/accelerator`，并镜像到
+     `/opt/leigod/config/accelerator.ini` 的 `[base] token`，供旧代码路径读取。该目录
+     在源码安装和 DEB 升级时会保留，所以绑定可以跨重装保留。配置目录仅允许 root
+     访问（`0700`），避免闭源程序调整文件权限后泄露令牌。
+
+监控脚本启动时会把令牌状态写进 journald（只报存在与否，不打印令牌内容）：
+
+```bash
+journalctl -u leigod_plugin.service | grep -E 'Binding token|No binding token'
+```
+
+- 显示 `Binding token present in: …` → 设备侧已有令牌，若仍连不上就看第 1 条（接口崩溃循环）。
+- 显示 `No binding token stored yet` → 设备侧没有令牌，请在 App 里重新绑定一次
+  （`systemctl restart leigod_plugin.service` 后再操作）。注意：旧版升级上来时，如果令牌
+  只存在旧位置（例如 `config/accelerator`），重新安装会把该文件清空，需要重新绑定。
+
+
+
+**Q: 上游更新后彻底跑不起来（OpenWrt / BusyBox 相关内容）？**
+
+从 2026-09 的上游构建（自报 `acc version:1.3.0.01`，SHA-256
+`f81ec6a7e1a5bcef8cb8d1bf233141ece7d54250881422ecc2814c98df819e23`）起，雷神把
+路由/OpenWrt 的代码路径混了进来，闭源程序会：
+
+- 用 `uci get accelerator.base.token` 读取绑定令牌（由 `compat/uci` 兼容层应答，
+  令牌存放在 `config/uci/accelerator` 并镜像进 `accelerator.ini`）；
+- 尝试读取 `/etc/board.json`（OpenWrt 板级数据库，普通发行版没有，只会产生一条 WARN）；
+- 执行 `ps ax | grep acc-gw.router.amd64` 来查找自己的子进程，并按 **BusyBox 的
+  `ps ax` 列格式**（`PID USER VSZ STAT COMMAND`）解析第 3 列。
+
+最后一条是致命的：glibc/util-linux 发行版的 `ps ax` 是 `PID TTY STAT TIME COMMAND`，
+于是解析到状态字符串（如 `Ss`）时抛出未捕获的 `std::invalid_argument`，进程直接
+SIGABRT（`systemctl status` 里的 `dumped core`），或者主程序每 5 秒重新 fork 一次
+`-r web` 子进程、手机 App 始终连不上。
+
+本仓库为此提供了 `compat/ps`：一个只处理「列出全部进程」调用的兼容层，输出 BusyBox
+风格的列并隐藏查询自身的 `sh`/`grep` 进程。监控脚本会把 `/opt/leigod/compat` 放到
+`PATH` 最前面，因此重新安装（`sudo ./install.sh`）后即可生效：
+
+```bash
+journalctl -xeu leigod_plugin.service | grep -E 'Web helper|Invalid input|dumped core'
 ```
 
 **Q: 重启后加速失效？**  

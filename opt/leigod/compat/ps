@@ -1,0 +1,77 @@
+#!/bin/sh
+# OpenWrt/BusyBox compatible "ps" for the upstream leigod gateway.
+#
+# Why this exists: since upstream build 1.3.0.01 the closed-source gateway
+# locates its own helper processes by running
+#     ps ax | grep acc-gw.router.amd64
+# and parses the result as BusyBox "ps ax" output
+# (PID USER VSZ STAT COMMAND), calling std::stoi() on the third column.
+# On a glibc/util-linux host "ps ax" prints PID TTY STAT TIME COMMAND, so the
+# parse hits a status string such as "Ss", throws std::invalid_argument and the
+# process dies with SIGABRT ("dumped core" in systemctl status) or the daemon
+# respawns its "-r web" helper every 5 seconds, which leaves the phone App
+# unable to connect. A fragment: the query's own shell/grep line is also
+# matched by the grep, so it is filtered out here as well.
+#
+# Only the "all processes" forms are translated; every other invocation is
+# passed through to the real ps unchanged.
+set -u
+
+real_ps=
+for candidate in /usr/bin/ps /bin/ps /usr/local/bin/ps; do
+    if [ -x "$candidate" ]; then
+        real_ps=$candidate
+        break
+    fi
+done
+[ -n "$real_ps" ] || exit 127
+
+translate_all_processes() {
+    "$real_ps" -eo pid,user,vsz,stat,args 2>/dev/null | tail -n +2 | awk '
+        {
+            pid = $1
+            user = $2
+            vsz = $3
+            stat = $4
+            $1 = ""
+            $2 = ""
+            $3 = ""
+            $4 = ""
+            sub(/^ +/, "", $0)
+            command = $0
+
+            # Rosetta can prefix argv[0] with the resolved executable path.
+            # Match the query itself even when it is not the first token.
+            if (command ~ /ps ax.*grep.*acc-gw[.]router[.]amd64/) next
+
+            # Rosetta also exposes the gateway executable twice in cmdline.
+            # Upstream compares COMMAND against the single-executable form;
+            # leaving the prefix makes it kill a healthy web helper repeatedly.
+            split(command, args, " ")
+            if (args[1] == args[2] && args[1] ~ /(^|\/)acc-gw[.]router[.]amd64$/) {
+                sub(/^[^ ]+ +/, "", command)
+            }
+
+            # Drop the transient processes that run the query itself
+            # (sh -c "ps ax | grep ...", the grep/ps/tail/awk helpers) so the
+            # upstream parser does not mistake them for gateway processes.
+            if (command ~ /(^|\/)ps( |$)/) next
+            if (command ~ /(^|\/)grep( |$)/) next
+            if (command ~ /(^|\/)tail( |$)/) next
+            if (command ~ /(^|\/)awk( |$)/) next
+            if (command ~ /(^|\/)date( |$)/) next
+            if (command ~ /(^|\/)sh( |$)/) next
+            if (command ~ /(^|\/)bash( |$)/) next
+
+            printf "%5s %-8s %6s %-4s %s\n", pid, user, vsz, stat, command
+        }'
+}
+
+case "$*" in
+    ""|ax|aux|-ax|-aux|-e|-A|axc|axca|-axc|-axca)
+        translate_all_processes
+        ;;
+    *)
+        exec "$real_ps" "$@"
+        ;;
+esac

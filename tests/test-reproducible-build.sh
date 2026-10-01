@@ -28,6 +28,7 @@ LEIGOD_ASSET_SOURCE_DIR=$FIXTURES LEIGOD_CHECKSUM_FILE=$TEST_ROOT/checksums.sha2
     sh "$REPO_DIR/packages/build-tar.sh"
 cmp "$TEST_ROOT/first.tar.gz" "$TAR_OUTPUT"
 tar -tzf "$TAR_OUTPUT" | grep -q "leigod-plugin-$PACKAGE_VERSION/THIRD_PARTY_NOTICES.md"
+tar -tzf "$TAR_OUTPUT" | grep -q "leigod-plugin-$PACKAGE_VERSION/scripts/install-configs.sh"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
     LEIGOD_ASSET_SOURCE_DIR=$FIXTURES LEIGOD_CHECKSUM_FILE=$TEST_ROOT/checksums.sha256 \
@@ -38,5 +39,7 @@ if command -v dpkg-deb >/dev/null 2>&1; then
         sh "$REPO_DIR/packages/build-deb.sh"
     cmp "$TEST_ROOT/first.deb" "$DEB_OUTPUT"
     dpkg-deb --info "$DEB_OUTPUT" >/dev/null
+    dpkg-deb --control "$DEB_OUTPUT" "$TEST_ROOT/control"
+    cmp "$REPO_DIR/debian/conffiles" "$TEST_ROOT/control/conffiles"
 fi
 echo "reproducible-build tests passed"

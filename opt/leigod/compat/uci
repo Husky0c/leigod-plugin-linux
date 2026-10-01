@@ -1,0 +1,335 @@
+#!/bin/sh
+# OpenWrt uci compatibility layer for the Linux port.
+#
+# The current upstream build added OpenWrt configuration handling: it stores and
+# reads its account token through "uci", for example
+#
+#     sh -c "uci get accelerator.base.token"
+#
+# Plain Linux distributions have no uci, so that lookup fails and the token can
+# never be persisted. This shim answers the subset of uci the daemon uses and
+# keeps its data in plain files, mirroring the token into the ini file so the
+# legacy code path sees the same value.
+#
+# Store: $LEIGOD_CONF_DIR/uci/<config> (uci syntax)
+# Mirror: $LEIGOD_CONF_DIR/accelerator.ini [base] token (ini syntax)
+#
+# It is installed to /opt/leigod/compat/uci next to the ps compatibility shim and
+# reached through the PATH that steamdeck_acc_monitor.sh prepends. Unsupported
+# commands succeed quietly so that a missing OpenWrt feature never breaks the
+# daemon, while unknown option reads report failure the way uci does.
+set -u
+
+CONF_DIR=${LEIGOD_CONF_DIR:-/opt/leigod/config}
+UCI_DIR=$CONF_DIR/uci
+INI_FILE=$CONF_DIR/accelerator.ini
+
+umask 077
+
+quote="'"
+
+config_file() {
+    printf '%s/%s\n' "$UCI_DIR" "$1"
+}
+
+valid_component() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_.-]*) return 1 ;;
+    esac
+    return 0
+}
+
+read_uci_option() {
+    uci_section=$2
+    uci_option=$3
+    [ -f "$1" ] || return 0
+    uci_value=$(awk -v section="$uci_section" -v option="$uci_option" '
+        /^[ \t]*config[ \t]/ { current = $2; next }
+        /^[ \t]*option[ \t]/ {
+            if (current == section && $2 == option) {
+                sub(/^[ \t]*option[ \t]+[^ \t]+[ \t]*/, "")
+                print
+                exit
+            }
+        }
+    ' "$1")
+    printf '%s\n' "$uci_value" | sed -e "s/^['\"]//" -e "s/['\"]$//"
+}
+
+read_ini_option() {
+    ini_section=$2
+    ini_option=$3
+    [ -f "$1" ] || return 0
+    awk -v section="$ini_section" -v option="$ini_option" '
+        /^[ \t]*\[[^]]*\][ \t]*$/ {
+            current = $0
+            gsub(/^[ \t]*\[/, "", current)
+            gsub(/\][ \t]*$/, "", current)
+            next
+        }
+        {
+            line = $0
+            sub(/^[ \t]*/, "", line)
+            if (current == section && line ~ "^" option "=") {
+                sub(/^[^=]*=/, "", line)
+                print line
+                exit
+            }
+        }
+    ' "$1"
+}
+
+
+# Sets an option in a uci file in place, keeping every other line untouched.
+write_uci_option() {
+    uci_section=$2
+    uci_option=$3
+    uci_value=$4
+    mkdir -p "$UCI_DIR" || return 1
+    uci_tmp=$1.tmp.$$
+    if [ -f "$1" ]; then
+        awk -v section="$uci_section" -v option="$uci_option" \
+            -v value="$uci_value" -v q="$quote" '
+            function flush() {
+                if (found && !written) {
+                    print "\toption " option " " q value q
+                    written = 1
+                }
+            }
+            /^[ \t]*config[ \t]/ {
+                flush()
+                current = $2
+                if (current == section) found = 1
+                print
+                next
+            }
+            /^[ \t]*option[ \t]/ {
+                if (current == section && $2 == option) {
+                    print "\toption " option " " q value q
+                    written = 1
+                    next
+                }
+                print
+                next
+            }
+            { print }
+            END {
+                flush()
+                if (!found) {
+                    print "config " section
+                    print "\toption " option " " q value q
+                }
+            }
+        ' "$1" > "$uci_tmp" || return 1
+    else
+        {
+            printf 'config %s\n' "$uci_section"
+            printf '\toption %s %s%s%s\n' "$uci_option" "$quote" "$uci_value" "$quote"
+        } > "$uci_tmp" || return 1
+    fi
+    chmod 0600 "$uci_tmp" || return 1
+    mv -f "$uci_tmp" "$1"
+}
+
+# Sets a key in an ini section in place, keeping other keys and sections.
+write_ini_option() {
+    ini_section=$2
+    ini_option=$3
+    ini_value=$4
+    mkdir -p "$(dirname "$1")" || return 1
+    ini_tmp=$1.tmp.$$
+    if [ -f "$1" ]; then
+        awk -v section="$ini_section" -v option="$ini_option" -v value="$ini_value" '
+            function flush() {
+                if (found && !written) {
+                    print option "=" value
+                    written = 1
+                }
+            }
+            /^[ \t]*\[[^]]*\][ \t]*$/ {
+                flush()
+                current = $0
+                gsub(/^[ \t]*\[/, "", current)
+                gsub(/\][ \t]*$/, "", current)
+                if (current == section) found = 1
+                print
+                next
+            }
+            {
+                line = $0
+                sub(/^[ \t]*/, "", line)
+                if (current == section && line ~ "^" option "=") {
+                    print option "=" value
+                    written = 1
+                    next
+                }
+                print
+            }
+            END {
+                flush()
+                if (!found) {
+                    print "[" section "]"
+                    print option "=" value
+                }
+            }
+        ' "$1" > "$ini_tmp" || return 1
+    else
+        {
+            printf '[%s]\n' "$ini_section"
+            printf '%s=%s\n' "$ini_option" "$ini_value"
+        } > "$ini_tmp" || return 1
+    fi
+    chmod 0600 "$ini_tmp" || return 1
+    mv -f "$ini_tmp" "$1"
+}
+
+# Drops a key from an ini section in place, keeping the rest of the file.
+delete_ini_option() {
+    ini_section=$2
+    ini_option=$3
+    [ -f "$1" ] || return 0
+    ini_tmp=$1.tmp.$$
+    awk -v section="$ini_section" -v option="$ini_option" '
+        /^[ \t]*\[[^]]*\][ \t]*$/ {
+            current = $0
+            gsub(/^[ \t]*\[/, "", current)
+            gsub(/\][ \t]*$/, "", current)
+            print
+            next
+        }
+        {
+            line = $0
+            sub(/^[ \t]*/, "", line)
+            if (current == section && line ~ "^" option "=") next
+            print
+        }
+    ' "$1" > "$ini_tmp" || return 1
+    chmod 0600 "$ini_tmp" || return 1
+    mv -f "$ini_tmp" "$1"
+}
+delete_uci_option() {
+    uci_section=$2
+    uci_option=$3
+    [ -f "$1" ] || return 0
+    uci_tmp=$1.tmp.$$
+    awk -v section="$uci_section" -v option="$uci_option" '
+        /^[ \t]*config[ \t]/ { current = $2; print; next }
+        /^[ \t]*option[ \t]/ {
+            if (current == section && $2 == option) next
+            print
+            next
+        }
+        { print }
+    ' "$1" > "$uci_tmp" || return 1
+    chmod 0600 "$uci_tmp" || return 1
+    mv -f "$uci_tmp" "$1"
+}
+
+print_uci_options() {
+    [ -f "$1" ] || return 0
+    awk -v prefix="$2" -v q="$quote" '
+        /^[ \t]*config[ \t]/ { section = $2; next }
+        /^[ \t]*option[ \t]/ {
+            value = $0
+            sub(/^[ \t]*option[ \t]+[^ \t]+[ \t]*/, "", value)
+            if (substr(value, 1, 1) == q) value = substr(value, 2)
+            if (substr(value, length(value)) == q) value = substr(value, 1, length(value) - 1)
+            print prefix "." section "." $2 "=" q value q
+        }
+    ' "$1"
+}
+
+# Splits config.section.option into path_config, path_section and path_option.
+split_path() {
+    path_config=${1%%.*}
+    path_rest=${1#*.}
+    path_section=
+    path_option=
+    if [ "$path_rest" != "$1" ]; then
+        case "$path_rest" in
+            *.*)
+                path_section=${path_rest%%.*}
+                path_option=${path_rest#*.}
+                ;;
+            *)
+                path_section=$path_rest
+                ;;
+        esac
+    fi
+}
+
+# uci accepts leading flags such as -q; ignore them.
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+[ "$#" -gt 0 ] || exit 1
+command_name=$1
+shift
+
+case "$command_name" in
+    get)
+        [ "$#" -gt 0 ] || exit 1
+        split_path "$1"
+        valid_component "$path_config" || exit 1
+        [ -n "$path_option" ] || exit 1
+        current_value=$(read_uci_option "$(config_file "$path_config")" \
+            "$path_section" "$path_option")
+        if [ -z "$current_value" ] && [ "$path_config" = accelerator ]; then
+            current_value=$(read_ini_option "$INI_FILE" "$path_section" "$path_option")
+        fi
+        [ -n "$current_value" ] || exit 1
+        printf '%s\n' "$current_value"
+        exit 0
+        ;;
+    set)
+        [ "$#" -gt 0 ] || exit 1
+        assignment=$1
+        split_path "${assignment%%=*}"
+        set_value=${assignment#*=}
+        valid_component "$path_config" || exit 0
+        valid_component "$path_section" || exit 0
+        valid_component "$path_option" || exit 0
+        write_uci_option "$(config_file "$path_config")" \
+            "$path_section" "$path_option" "$set_value" || exit 1
+        if [ "$path_config" = accelerator ]; then
+            write_ini_option "$INI_FILE" "$path_section" "$path_option" "$set_value" || exit 1
+        fi
+        exit 0
+        ;;
+    delete)
+        [ "$#" -gt 0 ] || exit 1
+        split_path "$1"
+        valid_component "$path_config" || exit 0
+        valid_component "$path_option" || exit 0
+        delete_uci_option "$(config_file "$path_config")" \
+            "$path_section" "$path_option" || exit 1
+        if [ "$path_config" = accelerator ]; then
+            delete_ini_option "$INI_FILE" "$path_section" "$path_option" || exit 1
+        fi
+        exit 0
+        ;;
+    show)
+        if [ "$#" -gt 0 ]; then
+            split_path "$1"
+            valid_component "$path_config" || exit 0
+            print_uci_options "$(config_file "$path_config")" "$path_config"
+        else
+            for uci_entry in "$UCI_DIR"/*; do
+                [ -f "$uci_entry" ] || continue
+                print_uci_options "$uci_entry" "$(basename "$uci_entry")"
+            done
+        fi
+        exit 0
+        ;;
+    commit|reload|changes)
+        exit 0
+        ;;
+    *)
+        # Unsupported uci features must not break the closed-source daemon.
+        exit 0
+        ;;
+esac

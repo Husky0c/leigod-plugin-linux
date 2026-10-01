@@ -23,23 +23,28 @@ trap 'exit 1' HUP INT TERM
 
 install -d -m 0755 \
     "$PACKAGE_ROOT/opt/leigod/config" \
+    "$PACKAGE_ROOT/opt/leigod/compat" \
     "$PACKAGE_ROOT/scripts" \
     "$PACKAGE_ROOT/systemd"
+chmod 0700 "$PACKAGE_ROOT/opt/leigod/config"
 
 LEIGOD_CHECKSUM_FILE=$CHECKSUM_FILE \
     sh "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/opt/leigod"
 
 install -m 0755 "$REPO_DIR/opt/leigod/steamdeck_acc_monitor.sh" "$PACKAGE_ROOT/opt/leigod/"
 install -m 0755 "$REPO_DIR/opt/leigod/leigod_uninstall.sh" "$PACKAGE_ROOT/opt/leigod/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/ps" "$PACKAGE_ROOT/opt/leigod/compat/"
+install -m 0755 "$REPO_DIR/opt/leigod/compat/uci" "$PACKAGE_ROOT/opt/leigod/compat/"
 install -m 0755 "$REPO_DIR/scripts/device-mac.sh" "$PACKAGE_ROOT/scripts/"
 install -m 0755 "$REPO_DIR/scripts/fetch-assets.sh" "$PACKAGE_ROOT/scripts/"
+install -m 0755 "$REPO_DIR/scripts/install-configs.sh" "$PACKAGE_ROOT/scripts/"
 install -m 0644 "$REPO_DIR/opt/leigod/fake_os-release" "$PACKAGE_ROOT/opt/leigod/"
 install -m 0644 "$REPO_DIR/opt/leigod/fake_product_name" "$PACKAGE_ROOT/opt/leigod/"
 install -m 0644 "$REPO_DIR/opt/leigod/config/acc_version.ini" "$PACKAGE_ROOT/opt/leigod/config/"
 install -m 0644 "$REPO_DIR/opt/leigod/config/new_upgrade_conf.json" "$PACKAGE_ROOT/opt/leigod/config/"
-install -m 0644 "$REPO_DIR/opt/leigod/config/accelerator.ini" "$PACKAGE_ROOT/opt/leigod/config/"
+install -m 0600 "$REPO_DIR/opt/leigod/config/accelerator.ini" "$PACKAGE_ROOT/opt/leigod/config/"
 : > "$PACKAGE_ROOT/opt/leigod/config/accelerator"
-chmod 0644 "$PACKAGE_ROOT/opt/leigod/config/accelerator"
+chmod 0600 "$PACKAGE_ROOT/opt/leigod/config/accelerator"
 
 install -m 0755 "$REPO_DIR/install.sh" "$PACKAGE_ROOT/"
 install -m 0755 "$REPO_DIR/uninstall.sh" "$PACKAGE_ROOT/"

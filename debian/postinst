@@ -23,6 +23,15 @@ case "$1" in
         fi
         ln -sfn "$BASE" /home/leigod
 
+        chmod 0700 "$BASE/config"
+        chmod 0600 "$BASE/config/accelerator.ini" "$BASE/config/accelerator"
+        if [ -d "$BASE/config/uci" ]; then
+            chmod 0700 "$BASE/config/uci"
+            if [ -f "$BASE/config/uci/accelerator" ]; then
+                chmod 0600 "$BASE/config/uci/accelerator"
+            fi
+        fi
+
         systemctl daemon-reload
         systemctl enable "$SERVICE_NAME"
         systemctl restart "$SERVICE_NAME"
