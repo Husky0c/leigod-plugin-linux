@@ -184,7 +184,12 @@ log_acc_log_tails() {
         [ -r "$log_file" ] || continue
         log_message "Last lines of $log_file:"
         tail -n 10 "$log_file" 2>/dev/null | while IFS= read -r line; do
-            log_message "  $line"
+            case $(printf '%s' "$line" | tr '[:upper:]' '[:lower:]') in
+                *token*|*password*|*authorization*|*secret*)
+                    log_message "  [credential-related log line redacted]"
+                    ;;
+                *) log_message "  $line" ;;
+            esac
         done
     done
 }

@@ -39,6 +39,7 @@ case " $* " in
         log_dir=${LEIGOD_ACC_TMP_DIR:-/tmp/acc}/log
         mkdir -p "$log_dir"
         printf '%s\n' 'child process recv signal, will exit, pid:1, sig:6, signame:Aborted' >> "$log_dir/acc_daemon.log"
+        printf '%s\n' 'token=fixture-secret-token' >> "$log_dir/acc_daemon.log"
         while :; do
             sh "$0" -r web -m tun -p 5588 >/dev/null 2>&1 &
             sleep 1
@@ -85,6 +86,11 @@ check_log 'Web helper was replaced'
 check_log 'recycling the accelerator daemon (recovery 1/1)'
 check_log 'child process recv signal, will exit'
 check_log 'giving up so systemd can report and rate-limit the failure'
+check_log 'credential-related log line redacted'
+if grep -q 'fixture-secret-token' "$monitor_log"; then
+    echo "monitor exposed a binding credential in its log tail" >&2
+    exit 1
+fi
 
 daemon_starts=$(grep -c 'Main daemon started successfully' "$monitor_log" || true)
 [ "$daemon_starts" -ge 2 ] || {

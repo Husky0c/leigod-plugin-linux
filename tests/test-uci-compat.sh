@@ -33,13 +33,30 @@ grep -q '^token=0123456789abcdef$' "$TEST_ROOT/config/accelerator.ini" || {
     exit 1
 }
 
+# Rebinding must rotate both copies, including an existing INI token.
+uci set accelerator.base.token=fedcba9876543210
+[ "$(uci get accelerator.base.token)" = fedcba9876543210 ]
+grep -q '^token=fedcba9876543210$' "$TEST_ROOT/config/accelerator.ini"
+
+# Binding credentials must stay private in both on-disk formats.
+[ "$(stat -c %a "$TEST_ROOT/config/uci/accelerator")" = 600 ]
+[ "$(stat -c %a "$TEST_ROOT/config/accelerator.ini")" = 600 ]
+
 # With only the ini left, the token must still be found (upgrade from an older
 # installation that stored it in the ini file).
 rm -f "$TEST_ROOT/config/uci/accelerator"
-[ "$(uci get accelerator.base.token)" = 0123456789abcdef ] || {
+[ "$(uci get accelerator.base.token)" = fedcba9876543210 ] || {
     echo "uci shim lost the token stored in accelerator.ini" >&2
     exit 1
 }
+
+# Deleting a binding must remove the fallback too.
+uci set accelerator.base.token=fedcba9876543210
+uci delete accelerator.base.token
+if uci get accelerator.base.token >/dev/null 2>&1; then
+    echo "uci shim kept a deleted binding token" >&2
+    exit 1
+fi
 
 # Defaults expected by the daemon: no-op commands succeed, unknown reads fail.
 uci commit accelerator

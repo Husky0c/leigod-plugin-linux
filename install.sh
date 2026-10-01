@@ -16,7 +16,7 @@ INSTALL_COMPLETE=0
 }
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/release.env"
-VERSION=$PACKAGE_VERSION
+INSTALL_VERSION=$PACKAGE_VERSION
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -158,11 +158,8 @@ install_files() {
     install -m 0755 "$SCRIPT_DIR/scripts/device-mac.sh" "$BASE/"
     install -m 0644 "$SCRIPT_DIR/opt/leigod/fake_os-release" "$BASE/"
     install -m 0644 "$SCRIPT_DIR/opt/leigod/fake_product_name" "$BASE/"
-    install -m 0644 "$SCRIPT_DIR/opt/leigod/config/acc_version.ini" "$BASE/config/"
-    install -m 0644 "$SCRIPT_DIR/opt/leigod/config/accelerator.ini" "$BASE/config/"
-    install -m 0644 "$SCRIPT_DIR/opt/leigod/config/new_upgrade_conf.json" "$BASE/config/"
-    : > "$BASE/config/accelerator"
-    chmod 0644 "$BASE/config/accelerator"
+    sh "$SCRIPT_DIR/scripts/install-configs.sh" \
+        "$SCRIPT_DIR/opt/leigod/config" "$BASE/config"
 }
 
 create_symlink() {
@@ -211,7 +208,7 @@ start_service() {
 print_summary() {
     echo ""
     echo "============================================"
-    echo " Leigod Plugin v$VERSION installed!"
+    echo " Leigod Plugin v$INSTALL_VERSION installed!"
     echo "============================================"
     echo " Device MAC: $(cat /var/lib/leigod/device-mac 2>/dev/null || echo pending)"
     echo " Manage: systemctl {status|restart|stop} $SERVICE_NAME"
@@ -220,7 +217,7 @@ print_summary() {
 }
 
 echo ""
-echo "Leigod Plugin v$VERSION Installer"
+echo "Leigod Plugin v$INSTALL_VERSION Installer"
 echo "============================================"
 echo ""
 

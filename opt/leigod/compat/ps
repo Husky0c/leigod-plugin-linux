@@ -40,6 +40,18 @@ translate_all_processes() {
             sub(/^ +/, "", $0)
             command = $0
 
+            # Rosetta can prefix argv[0] with the resolved executable path.
+            # Match the query itself even when it is not the first token.
+            if (command ~ /ps ax.*grep.*acc-gw[.]router[.]amd64/) next
+
+            # Rosetta also exposes the gateway executable twice in cmdline.
+            # Upstream compares COMMAND against the single-executable form;
+            # leaving the prefix makes it kill a healthy web helper repeatedly.
+            split(command, args, " ")
+            if (args[1] == args[2] && args[1] ~ /(^|\/)acc-gw[.]router[.]amd64$/) {
+                sub(/^[^ ]+ +/, "", command)
+            }
+
             # Drop the transient processes that run the query itself
             # (sh -c "ps ax | grep ...", the grep/ps/tail/awk helpers) so the
             # upstream parser does not mistake them for gateway processes.

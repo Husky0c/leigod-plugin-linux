@@ -22,9 +22,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
       - name: Validate POSIX shell syntax
-        run: find . -type f -name '*.sh' -print0 | xargs -0 -n1 dash -n
+        run: find . -type f \( -name '*.sh' -o -path './opt/leigod/compat/*' \) -print0 | xargs -0 -n1 dash -n
       - name: Run ShellCheck errors
-        run: find . -type f -name '*.sh' -print0 | xargs -0 shellcheck --severity=error --shell=sh
+        run: find . -type f \( -name '*.sh' -o -path './opt/leigod/compat/*' \) -print0 | xargs -0 shellcheck --severity=error --shell=sh
       - name: Inspect systemd security exposure
         run: systemd-analyze security --offline=yes systemd/leigod_plugin.service
       - name: Run tests

@@ -127,7 +127,7 @@ write_uci_option() {
             printf '\toption %s %s%s%s\n' "$uci_option" "$quote" "$uci_value" "$quote"
         } > "$uci_tmp" || return 1
     fi
-    chmod 0644 "$uci_tmp" 2>/dev/null || true
+    chmod 0600 "$uci_tmp" || return 1
     mv -f "$uci_tmp" "$1"
 }
 
@@ -159,8 +159,7 @@ write_ini_option() {
                 line = $0
                 sub(/^[ \t]*/, "", line)
                 if (current == section && line ~ "^" option "=") {
-                    sub(/^[^=]*=/, "", line)
-                    print option "=" line
+                    print option "=" value
                     written = 1
                     next
                 }
@@ -180,7 +179,7 @@ write_ini_option() {
             printf '%s=%s\n' "$ini_option" "$ini_value"
         } > "$ini_tmp" || return 1
     fi
-    chmod 0644 "$ini_tmp" 2>/dev/null || true
+    chmod 0600 "$ini_tmp" || return 1
     mv -f "$ini_tmp" "$1"
 }
 
@@ -205,7 +204,7 @@ delete_ini_option() {
             print
         }
     ' "$1" > "$ini_tmp" || return 1
-    chmod 0644 "$ini_tmp" 2>/dev/null || true
+    chmod 0600 "$ini_tmp" || return 1
     mv -f "$ini_tmp" "$1"
 }
 delete_uci_option() {
@@ -222,7 +221,7 @@ delete_uci_option() {
         }
         { print }
     ' "$1" > "$uci_tmp" || return 1
-    chmod 0644 "$uci_tmp" 2>/dev/null || true
+    chmod 0600 "$uci_tmp" || return 1
     mv -f "$uci_tmp" "$1"
 }
 
@@ -297,7 +296,7 @@ case "$command_name" in
         write_uci_option "$(config_file "$path_config")" \
             "$path_section" "$path_option" "$set_value" || exit 1
         if [ "$path_config" = accelerator ]; then
-            write_ini_option "$INI_FILE" "$path_section" "$path_option" "$set_value" || true
+            write_ini_option "$INI_FILE" "$path_section" "$path_option" "$set_value" || exit 1
         fi
         exit 0
         ;;
@@ -309,7 +308,7 @@ case "$command_name" in
         delete_uci_option "$(config_file "$path_config")" \
             "$path_section" "$path_option" || exit 1
         if [ "$path_config" = accelerator ]; then
-            delete_ini_option "$INI_FILE" "$path_section" "$path_option" || true
+            delete_ini_option "$INI_FILE" "$path_section" "$path_option" || exit 1
         fi
         exit 0
         ;;
@@ -334,4 +333,3 @@ case "$command_name" in
         exit 0
         ;;
 esac
-
